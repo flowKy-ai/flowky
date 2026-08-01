@@ -66,6 +66,34 @@ Import and reuse the existing definition, or extend it.
 
 It asks rather than blocks. Overloads and re-exports are legitimate, and a hard block produces false positives that get the hook switched off within a week.
 
+## FlowKy Bot
+
+A dependency pull request that says "tests failing" has moved the work to you, not away from you. So ours does not open one until it knows what passes.
+
+```console
+2 outdated, 2 candidates, 1 with advisories.
+  verification failed on `test` with 2 updates — isolating
+  held back `ms` — breaks `test`
+
+→ Updated and verified:  semver 7.5.0 → 7.8.5  (fixes a high advisory)
+→ Held back:             ms     2.0.0 → 2.1.3  (breaks `test`)
+```
+
+It applies the updates, runs your own `build`, `test`, `lint` and `typecheck` scripts, and when something breaks it binary-searches for the culprit, drops it and ships the rest. Isolation costs O(k log n) runs for k culprits rather than testing every update on its own. Majors are held back unless one carries a live advisory — an unpatched vulnerability is worse than a breaking change you were warned about.
+
+Zero dependencies, because a tool that audits your supply chain should not enlarge it. [Read it](./.github/scripts/flowky-bot.mjs) — it is one file.
+
+```yaml
+jobs:
+  dependencies:
+    uses: flowKy-ai/flowky/.github/workflows/flowky-bot.yml@main
+    permissions:
+      contents: write
+      pull-requests: write
+```
+
+Optional secrets: `ANTHROPIC_API_KEY` adds a written risk summary; `FLOWKY_BOT_TOKEN` (a fine-grained PAT with contents and pull-requests write) makes CI actually run on the bot's branch, which a pull request opened with `GITHUB_TOKEN` will not do.
+
 ## Repositories
 
 | Repo | Visibility | What it is |
