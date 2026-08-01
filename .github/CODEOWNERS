@@ -1,0 +1,18 @@
+# Review routing.
+#
+# The last matching pattern wins, so order matters: the catch-all goes first and
+# the sensitive paths go last. Getting that backwards is the classic mistake —
+# it silently makes every specific rule below it dead.
+
+*                       @BrosG
+
+# Anything that changes what the project claims about itself.
+/README.md              @BrosG
+/docs/                  @BrosG
+
+# Security and licence changes should never be a drive-by.
+/SECURITY.md            @BrosG
+/LICENSE                @BrosG
+
+# CI runs with repository credentials. A workflow change is a privilege change.
+/.github/workflows/     @BrosG
