@@ -189,6 +189,18 @@ function install(set) {
  * testing every update on its own.
  */
 function isolate(candidates, log) {
+  // Establish the tree is green BEFORE touching anything.
+  //
+  // Without this the search is meaningless on an already-red suite: no subset
+  // ever verifies, so it narrows to one arbitrary package, blames it, drops it,
+  // and repeats until nothing is left. Observed in the wild — 15 packages each
+  // "breaking test", 37 minutes of CI, and a conclusion that was pure noise.
+  const baseline = verify();
+  if (!baseline.ok) {
+    log(`\`${baseline.failed}\` fails on the unmodified tree — no update is responsible`);
+    return { keep: [], culprits: [], result: baseline, preexisting: true };
+  }
+
   let keep = candidates.slice();
   const culprits = [];
 
