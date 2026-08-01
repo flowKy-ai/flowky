@@ -4,7 +4,7 @@
 
 **Do not open a public issue.**
 
-Use GitHub's private reporting: **Security → Report a vulnerability** on this repository. If that is unavailable, email `security@flowky.ai`.
+Use GitHub's private reporting: **Security → Report a vulnerability** on this repository.
 
 Include what you did, what happened, and what you expected. A proof of concept helps enormously; a video without commands does not.
 
