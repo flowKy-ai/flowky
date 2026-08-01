@@ -1,0 +1,127 @@
+# FlowKy Bot — dependency updates that arrive already tested.
+#
+# Reusable. Private repositories in this organisation call this workflow rather
+# than copying it, so the supply-chain tooling has exactly one definition and
+# that definition is public and auditable.
+name: FlowKy Bot
+
+on:
+  schedule:
+    # Monday 06:00 UTC. One consolidated pull request a week beats a drip of
+    # individual ones — a drip is what trains people to merge without looking.
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+    inputs:
+      allow_major:
+        description: Also attempt major version bumps
+        type: boolean
+        default: false
+  workflow_call:
+    inputs:
+      allow_major:
+        type: boolean
+        default: false
+      node_version:
+        type: string
+        default: '20'
+      working_directory:
+        type: string
+        default: '.'
+    secrets:
+      # Optional. Without it the report is still complete — the written summary
+      # is an addition to the facts, never a substitute for them.
+      ANTHROPIC_API_KEY:
+        required: false
+      # Optional but recommended. A pull request opened with GITHUB_TOKEN does
+      # not trigger `pull_request` workflows, so CI would never run on the bot's
+      # own branch. A fine-grained PAT avoids that, and avoids enabling the
+      # org-wide "Actions can create and approve pull requests" setting — which
+      # would also let any workflow approve its own changes.
+      FLOWKY_BOT_TOKEN:
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: flowky-bot-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  update:
+    name: Verify and propose updates
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.FLOWKY_BOT_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version || '20' }}
+
+      - name: Install the current tree
+        working-directory: ${{ inputs.working_directory || '.' }}
+        run: npm ci --no-audit --no-fund || npm install --no-audit --no-fund
+
+      - name: Run FlowKy Bot
+        id: bot
+        working-directory: ${{ inputs.working_directory || '.' }}
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          FLOWKY_ALLOW_MAJOR: ${{ inputs.allow_major || github.event.inputs.allow_major || 'false' }}
+        run: node "$GITHUB_WORKSPACE/.github/scripts/flowky-bot.mjs"
+
+      - name: Open or update the pull request
+        if: steps.bot.outputs.has_changes == 'true'
+        working-directory: ${{ inputs.working_directory || '.' }}
+        env:
+          GH_TOKEN: ${{ secrets.FLOWKY_BOT_TOKEN || secrets.GITHUB_TOKEN }}
+          TITLE: ${{ steps.bot.outputs.title }}
+          BASE: ${{ github.event.repository.default_branch }}
+          USING_PAT: ${{ secrets.FLOWKY_BOT_TOKEN != '' }}
+        run: |
+          set -euo pipefail
+          BRANCH=flowky-bot/dependencies
+
+          if [ "$USING_PAT" != "true" ]; then
+            {
+              printf '\n> [!NOTE]\n'
+              printf '> Opened with the default `GITHUB_TOKEN`, so CI will not start on its own.\n'
+              printf '> Close and reopen this pull request to trigger it, or set a `FLOWKY_BOT_TOKEN` secret.\n'
+            } >> flowky-bot-report.md
+          fi
+
+          git config user.name  'flowky-bot'
+          git config user.email 'flowky-bot@users.noreply.github.com'
+          git checkout -B "$BRANCH"
+
+          git add -- package.json
+          # Guarded rather than bare: under `set -e` a false test would exit.
+          if [ -f package-lock.json ]; then git add -- package-lock.json; fi
+
+          # -F reads the body verbatim. Command substitution would let backticks
+          # and $ in the report run as shell.
+          { printf '%s\n\n' "$TITLE"; cat flowky-bot-report.md; } > /tmp/flowky-commit.txt
+          git commit --signoff -F /tmp/flowky-commit.txt
+
+          # --force-with-lease, not --force: if someone pushed to the bot branch
+          # by hand this stops, rather than discarding their commit.
+          git push --force-with-lease origin "$BRANCH"
+
+          if gh pr view "$BRANCH" --json number >/dev/null 2>&1; then
+            gh pr edit "$BRANCH" --title "$TITLE" --body-file flowky-bot-report.md
+          else
+            gh pr create --base "$BASE" --head "$BRANCH" \
+              --title "$TITLE" --body-file flowky-bot-report.md
+          fi
+
+      - name: Summarise when nothing could be verified
+        if: steps.bot.outputs.has_changes != 'true'
+        working-directory: ${{ inputs.working_directory || '.' }}
+        run: cat flowky-bot-report.md >> "$GITHUB_STEP_SUMMARY"
