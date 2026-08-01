@@ -67,7 +67,16 @@ jobs:
 
       - name: Install the current tree
         working-directory: ${{ inputs.working_directory || '.' }}
-        run: npm ci --no-audit --no-fund || npm install --no-audit --no-fund
+        run: |
+          # A repository with no manifest is a valid thing to point this at —
+          # the org calls this workflow from every repo, including ones that
+          # carry no npm dependencies at all. The bot itself reports that
+          # cleanly, so the install must not fail the run before it gets there.
+          if [ ! -f package.json ]; then
+            echo "No package.json here — nothing to install."
+            exit 0
+          fi
+          npm ci --no-audit --no-fund || npm install --no-audit --no-fund
 
       - name: Run FlowKy Bot
         id: bot
