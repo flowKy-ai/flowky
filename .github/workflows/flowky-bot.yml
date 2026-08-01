@@ -23,7 +23,7 @@ on:
         default: false
       node_version:
         type: string
-        default: '20'
+        default: '22'
       working_directory:
         type: string
         default: '.'
@@ -61,9 +61,26 @@ jobs:
         with:
           token: ${{ secrets.FLOWKY_BOT_TOKEN || secrets.GITHUB_TOKEN }}
 
+      # A reusable workflow's `run:` steps execute against the CALLER's
+      # checkout, not the repository the workflow is defined in — so the script
+      # is not on disk when another repo calls this. Fetch it explicitly.
+      - name: Resolve the ref this workflow was called at
+        id: botref
+        run: echo "value=${GITHUB_WORKFLOW_REF##*@}" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch FlowKy Bot
+        uses: actions/checkout@v4
+        with:
+          repository: flowKy-ai/flowky
+          # Pinned to the ref of the workflow being run, so the script and the
+          # workflow can never drift apart.
+          ref: ${{ steps.botref.outputs.value }}
+          path: .flowky-bot
+          persist-credentials: false
+
       - uses: actions/setup-node@v4
         with:
-          node-version: ${{ inputs.node_version || '20' }}
+          node-version: ${{ inputs.node_version || '22' }}
 
       - name: Install the current tree
         working-directory: ${{ inputs.working_directory || '.' }}
@@ -84,7 +101,7 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           FLOWKY_ALLOW_MAJOR: ${{ inputs.allow_major || github.event.inputs.allow_major || 'false' }}
-        run: node "$GITHUB_WORKSPACE/.github/scripts/flowky-bot.mjs"
+        run: node "$GITHUB_WORKSPACE/.flowky-bot/.github/scripts/flowky-bot.mjs"
 
       - name: Open or update the pull request
         if: steps.bot.outputs.has_changes == 'true'
