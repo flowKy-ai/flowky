@@ -1,0 +1,81 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Cancel superseded runs. Without this, ten pushes to a PR queue ten full runs
+# and the useful one finishes last.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Least privilege by default. A workflow that only reads code has no business
+# holding a token that can write to the repository.
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Starter scaffolds and produces valid output
+        run: |
+          node starter/create-site.mjs ci-next
+          node starter/create-site.mjs ci-static --stack static
+
+          # The agent config is the reason this starter exists, so its absence
+          # is a failure, not a warning.
+          for f in CLAUDE.md .claude/rules/style.md .claude/skills/project-map/SKILL.md .gitignore; do
+            test -f "ci-next/$f" || { echo "missing: $f"; exit 1; }
+          done
+
+          node -e "JSON.parse(require('fs').readFileSync('ci-next/package.json','utf8'))"
+          node -e "JSON.parse(require('fs').readFileSync('ci-next/tsconfig.json','utf8'))"
+          test -f ci-static/public/index.html
+
+      - name: Starter refuses to overwrite an existing directory
+        run: |
+          if node starter/create-site.mjs ci-next 2>/dev/null; then
+            echo "scaffolded over an existing directory — it must refuse"
+            exit 1
+          fi
+
+      - name: No secrets committed
+        run: |
+          # Cheap belt-and-braces alongside push protection. Catches the shapes
+          # that most often appear in documentation examples by accident.
+          if grep -rInE '(sk-[a-zA-Z0-9]{20,}|ghp_[a-zA-Z0-9]{36}|-----BEGIN [A-Z ]*PRIVATE KEY)' \
+               --exclude-dir=.git --exclude-dir=ci-next --exclude-dir=ci-static .; then
+            echo "possible credential found"
+            exit 1
+          fi
+
+  links:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Relative links resolve
+        run: |
+          # A README promising ./docs/api that does not exist is the first thing
+          # a visitor clicks and the first impression they keep.
+          fail=0
+          while read -r target; do
+            clean="${target%%#*}"
+            [ -z "$clean" ] && continue
+            if [ ! -e "$clean" ]; then echo "broken link: $clean"; fail=1; fi
+          done < <(grep -rhoE '\]\(\./[^)]+\)' --include='*.md' . | sed -E 's/^\]\(\.\///; s/\)$//')
+          exit $fail

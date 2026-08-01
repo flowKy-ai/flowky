@@ -1,0 +1,22 @@
+name: Bug report
+description: Something does not work as described
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, what you got instead.
+    validations: { required: true }
+  - type: input
+    id: env
+    attributes:
+      label: Environment
+      placeholder: macOS 15, Node 20.11, VS Code 1.95
+    validations: { required: true }
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Exact commands. A repository we can clone is ideal.
+    validations: { required: true }
