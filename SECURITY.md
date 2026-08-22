@@ -6,6 +6,8 @@
 
 Use GitHub's private reporting: **Security → Report a vulnerability** on this repository.
 
+No GitHub account, or reporting from a locked-down environment? Email **security@flowky.ai** — the same address published in [`flowky.ai/.well-known/security.txt`](https://flowky.ai/.well-known/security.txt) (RFC 9116), which is always the current source of truth for this contact.
+
 Include what you did, what happened, and what you expected. A proof of concept helps enormously; a video without commands does not.
 
 ## What to expect
