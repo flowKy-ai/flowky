@@ -51,6 +51,16 @@ your-project/
     └── hooks/flowky-guard.mjs       # runs on macOS, Linux and Windows
 ```
 
+## The perfect flow
+
+The whole product is seven steps, and the extension walks you through them
+(`Welcome: Open Walkthrough` → *FlowKy: the perfect flow*): connect →
+kick off → **equip your agent with the standards** (each playbook becomes a
+Claude Code skill, auto-loaded by relevance, plus an AGENTS.md section for
+Cursor, Copilot and Codex) → give it a map → audit → hand a finding to the
+agent → sync to your project page. The written version lives at
+[flowky.ai/docs/the-perfect-flow](https://flowky.ai/en/docs/the-perfect-flow).
+
 ## How the guard works
 
 The guard is a hook, not a prompt. That distinction is the whole product: instructions in a context file are advisory and drift as the window fills, while a hook is checked on every single write regardless of what the model decided.
