@@ -136,8 +136,26 @@ jobs:
           { printf '%s\n\n' "$TITLE"; cat flowky-bot-report.md; } > /tmp/flowky-commit.txt
           git commit --signoff -F /tmp/flowky-commit.txt
 
-          # --force-with-lease, not --force: if someone pushed to the bot branch
-          # by hand this stops, rather than discarding their commit.
+          # --force-with-lease needs a remote-tracking ref to weigh its lease
+          # against, and the checkout above fetched only the default branch. So
+          # from the second run onward — once the bot branch exists on the
+          # remote — every push was refused as "stale info" and a week of
+          # verified updates went in the bin. Fetch the branch first.
+          git fetch origin "+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH" 2>/dev/null || true
+
+          # Fetching immediately before pushing would hand the lease whatever is
+          # there and force straight over it, which is the one thing the lease
+          # existed to prevent. So the guarantee is made explicit instead: this
+          # branch belongs to the bot, and a commit by anyone else on its tip
+          # stops the run rather than being discarded.
+          if git rev-parse --verify -q "refs/remotes/origin/$BRANCH" >/dev/null; then
+            tip_author=$(git log -1 --format='%an' "refs/remotes/origin/$BRANCH")
+            if [ "$tip_author" != 'flowky-bot' ]; then
+              echo "::error::$BRANCH is headed by a commit from '$tip_author', not flowky-bot. Refusing to overwrite it."
+              exit 1
+            fi
+          fi
+
           git push --force-with-lease origin "$BRANCH"
 
           if gh pr view "$BRANCH" --json number >/dev/null 2>&1; then
