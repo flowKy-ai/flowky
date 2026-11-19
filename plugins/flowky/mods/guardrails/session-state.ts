@@ -10,11 +10,13 @@
 // a corrupt or forged file is an empty state, never a crash and never a reason to block.
 
 import type { Io } from '../io'
-import { join } from '../io'
+import { join, readSafe } from '../io'
 import { STATE_DIR, readState, stateDir, updateState } from '../state'
 
 export const GUARD_DIR = 'guard'
 export const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000
+/** How long the quoted error line of a failed command is kept. */
+export const ERROR_TTL_MS = 24 * 60 * 60 * 1000
 export const MAX_SESSIONS = 30
 const MAX_WRITES = 50
 const MAX_REMOVED = 200
@@ -104,7 +106,8 @@ export function sanitizeSession(raw: unknown, now: number): GuardSession {
           streak: Number.isInteger(streak) && streak > 0 && streak < 1000 ? streak : 0,
           exit: typeof x.exit === 'number' && Number.isInteger(x.exit) ? x.exit : null,
           sig: typeof x.sig === 'string' ? x.sig.slice(0, 300) : '',
-          err: typeof x.err === 'string' ? x.err.slice(0, 300) : '',
+          // The quoted error line (up to 300 characters of a command's output) is kept 24 hours at most (review F10).
+          err: typeof x.err === 'string' && now - num(x.at, updatedAt) <= ERROR_TTL_MS ? x.err.slice(0, 300) : '',
           epoch: num(x.epoch, -1),
           network: x.network === true,
           paused: x.paused === true,
@@ -181,7 +184,7 @@ export async function withSession<T>(io: Io, root: string, session: string, chan
   })
   if (written) {
     // updateState swallows write errors: check that what we meant to keep is on disk.
-    const back = await io.readText(join(stateDir(io, root), `${name}.json`)).catch(() => undefined)
+    const back = await readSafe(io, join(stateDir(io, root), `${name}.json`), { maxBytes: MAX_STATE_BYTES * 4, root })
     saved = typeof back === 'string' && back.includes(`"updatedAt": ${now}`)
   }
   return { result, saved }

@@ -5,7 +5,7 @@
 // directly. Pure functions here; the drivers read the bytes.
 
 import type { Io } from './io'
-import { kilo } from './io'
+import { kilo, readSafe } from './io'
 
 export type Usage = {
   input_tokens?: number
@@ -46,7 +46,7 @@ export async function lastContextFromTranscript(io: Io, transcriptPath: string |
   if (!st || st.kind !== 'file') return undefined
   const span = 512 * 1024
   const offset = Math.max(0, st.size - span)
-  const tail = await io.readRange(transcriptPath, offset, st.size - offset)
+  const tail = await readSafe(io, transcriptPath, { maxBytes: span, offset, partial: true })
   if (!tail) return undefined
   const rows = parseUsageRows(tail).filter(r => !r.isSidechain)
   const last = rows[rows.length - 1]

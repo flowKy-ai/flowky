@@ -43,17 +43,43 @@ export function modIo($: EngineInterface, platform: Io['platform'], transcriptPa
       if (rr && pr && !(fold(posix(pr)) + '/').startsWith(fold(posix(rr)) + '/')) throw new Error(`refused: ${path} resolves outside the project`)
       await $.fs.write(path, text)
     },
-    async readText(path) {
-      return $.fs.read(path).then(
+    async readFile(path, o) {
+      // The strict read through $: a plain file (not a link, not special), the size within the cap,
+      // its folder's real path inside the root when given; then a read of at most that many bytes.
+      const st = await $.fs.stat(path).catch(() => undefined)
+      if (!st || st.isLink || st.kind !== 'file') return undefined
+      const offset = Math.max(0, o.offset ?? 0)
+      const avail = Math.max(0, st.size - offset)
+      if (avail > o.maxBytes && !o.partial) return undefined
+      if (o.root) {
+        const real = (await $.fs.stat(posix(o.root), { resolve: true }).catch(() => undefined)) as { realPath?: string } | undefined
+        const dir = posix(path).slice(0, posix(path).lastIndexOf('/'))
+        const at = (await $.fs.stat(dir, { resolve: true }).catch(() => undefined)) as { realPath?: string } | undefined
+        if (real?.realPath && at?.realPath) {
+          const r = fold(posix(real.realPath))
+          const d = fold(posix(at.realPath))
+          if (d !== r && !d.startsWith(r + '/')) return undefined
+        } else {
+          // No real path given: no folder between the root and the file may be a link.
+          const r = posix(o.root)
+          if (dir !== r && !fold(dir).startsWith(fold(r) + '/')) return undefined
+          let cur = r
+          for (const part of dir.slice(r.length + 1).split('/').filter(Boolean)) {
+            cur = `${cur}/${part}`
+            if (part === '..' || (await $.fs.stat(cur).catch(() => undefined))?.isLink) return undefined
+          }
+        }
+      }
+      return $.fs.read(path, { offset, length: Math.min(o.maxBytes, avail, 16 * 1024 * 1024) }).then(
         t => (typeof t === 'string' ? t : undefined),
         () => undefined,
       )
     },
+    async readText(path) {
+      return this.readFile!(path, { maxBytes: 16 * 1024 * 1024 })
+    },
     async readRange(path, offset, bytes) {
-      return $.fs.read(path, { offset, length: Math.min(bytes, 4 * 1024 * 1024) }).then(
-        t => (typeof t === 'string' ? t : undefined),
-        () => undefined,
-      )
+      return this.readFile!(path, { maxBytes: Math.min(bytes, 4 * 1024 * 1024), offset, partial: true })
     },
     async list(dir) {
       const entries = await $.fs.list(dir)
@@ -64,9 +90,6 @@ export function modIo($: EngineInterface, platform: Io['platform'], transcriptPa
         s => ({ kind: s.kind === 'file' ? 'file' : s.kind === 'dir' ? 'dir' : 'other', size: s.size, mtimeMs: s.mtimeMs }),
         () => undefined,
       )
-    },
-    async remove() {
-      // The mods layer deletes nothing.
     },
     async run() {
       // The mods layer starts no process.

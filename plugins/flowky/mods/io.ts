@@ -21,17 +21,45 @@ export type RunResult = {
   timedOut?: boolean
 }
 
-export type RunOptions = { cwd?: string; timeoutMs: number; stdin?: string; env?: Record<string, string> }
+export type RunOptions = {
+  cwd?: string
+  timeoutMs: number
+  stdin?: string
+  env?: Record<string, string>
+  /** Inherited variables whose name starts with one of these prefixes are not passed on (case-insensitive). */
+  dropEnv?: string[]
+  /** The program must not be found in this folder or below it (a repository's own git.exe, say). */
+  programOutside?: string
+}
+
+/**
+ * How the shared reader reads a file. `maxBytes` caps what is read; a file with more than that from
+ * `offset` is refused, unless `partial` (then the first `maxBytes` from `offset` are read). With
+ * `root`, the file's real path (every folder resolved) must lie inside the real path of `root`.
+ */
+export type ReadOptions = { maxBytes: number; offset?: number; partial?: boolean; root?: string }
 
 export interface Io {
-  /** The whole text of a file, or undefined when it is missing or unreadable. */
+  /**
+   * Driver primitives behind readSafe (below). Shared logic never calls them directly: a test
+   * (tests-node/read-sites.test.mjs) fails on a call outside this file and the drivers.
+   * The Node driver refuses links and special files here too, and caps readText at 16 MB.
+   */
   readText(path: string): Promise<string | undefined>
-  /** At most `bytes` bytes from `offset` (default 0), as text. */
   readRange(path: string, offset: number, bytes: number): Promise<string | undefined>
+  /**
+   * The strict read (Node and mods drivers): a regular file only (never a symbolic link, a
+   * junction, a device or a pipe, so it never blocks), at most `maxBytes`, and inside `root` by
+   * real path when given. Undefined when refused, missing or unreadable.
+   */
+  readFile?(path: string, opts: ReadOptions): Promise<string | undefined>
   list(dir: string): Promise<Entry[]>
   stat(path: string): Promise<Stat | undefined>
-  /** Removes a file outside any project (a leftover the plugin itself made, such as a temporary git index). */
-  remove(path: string): Promise<void>
+  /**
+   * Removes a file the plugin itself made outside the state folder (FlowKy Pro's temporary git
+   * index). Not in the shared Node driver: FlowKy Pro adds a confined one for its own use.
+   */
+  remove?(path: string): Promise<void>
   /** Runs a program by argument vector, no shell, time-boxed; never throws. */
   run(argv: readonly string[], options: RunOptions): Promise<RunResult>
   now(): Promise<number>
@@ -69,7 +97,10 @@ export interface Io {
    * see mods/home.ts), else `~/.flowky`. Undefined when unknown.
    */
   flowkyHome?(): string | undefined
-  /** Node driver only: loads a package from the PROJECT's node_modules (never the plugin's), or undefined. */
+  /**
+   * Loads a package from the PROJECT's node_modules, which runs repository code. Not in the shared
+   * Node driver: only FlowKy Pro adds it, used after the user's consent.
+   */
   loadProjectModule?(root: string, name: string): unknown
   /**
    * Set by the dispatcher for hooks that may run before the user trusted the folder (SessionStart):
@@ -101,9 +132,40 @@ export function basename(path: string): string {
   return p.slice(p.lastIndexOf('/') + 1)
 }
 
-/** Reads and parses a JSON file; undefined when missing, `{ error }` when broken. */
-export async function readJson<T>(io: Io, path: string): Promise<{ value?: T; error?: string }> {
-  const text = await io.readText(path)
+/**
+ * THE way shared logic reads a file (a repository can supply any path it reads): a regular file
+ * only (no symbolic link or junction, no device, pipe or folder, so a read never blocks), at most
+ * `maxBytes`, and, with `root`, a real path inside the project. Drivers with the strict primitive
+ * (readFile) do it in one place; for the others (the tests' memory driver) the same rules are
+ * applied here with stat, isLink and readRange. Undefined when refused, missing or unreadable.
+ */
+export async function readSafe(io: Io, path: string, opts: ReadOptions): Promise<string | undefined> {
+  if (io.readFile) return io.readFile(path, opts).catch(() => undefined)
+  if (await (io.isLink ? io.isLink(path) : Promise.resolve(false)).catch(() => true)) return undefined
+  const st = await io.stat(path).catch(() => undefined)
+  if (!st || st.kind !== 'file') return undefined
+  const offset = Math.max(0, opts.offset ?? 0)
+  const avail = Math.max(0, st.size - offset)
+  if (avail > opts.maxBytes && !opts.partial) return undefined
+  if (opts.root && io.isLink) {
+    const r = opts.root.replace(/\\/g, '/').replace(/\/+$/, '')
+    const p = path.replace(/\\/g, '/')
+    if (!p.toLowerCase().startsWith(r.toLowerCase() + '/')) return undefined
+    let at = r
+    for (const part of p.slice(r.length + 1).split('/').slice(0, -1)) {
+      at = `${at}/${part}`
+      if (part === '..' || (await io.isLink(at).catch(() => true))) return undefined
+    }
+  }
+  return io.readRange(path, offset, Math.min(opts.maxBytes, avail)).catch(() => undefined)
+}
+
+/** Default cap for the small JSON files the plugin reads (config, state, settings). */
+export const SMALL_FILE_BYTES = 1024 * 1024
+
+/** Reads (through readSafe) and parses a JSON file; undefined when missing or refused, `{ error }` when broken. */
+export async function readJson<T>(io: Io, path: string, opts: Partial<ReadOptions> = {}): Promise<{ value?: T; error?: string }> {
+  const text = await readSafe(io, path, { maxBytes: SMALL_FILE_BYTES, ...opts })
   if (text === undefined) return {}
   try {
     return { value: JSON.parse(text) as T }

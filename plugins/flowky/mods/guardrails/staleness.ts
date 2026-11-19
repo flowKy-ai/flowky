@@ -19,7 +19,8 @@
 // (rev-parse, rev-list, diff between two commits): nothing that runs a repository's hooks.
 
 import type { Io } from '../io'
-import { join } from '../io'
+import { join, readSafe } from '../io'
+import { gitOutput } from '../git'
 import type { IndexMeta } from './symbol-index'
 import { inline } from './text'
 
@@ -32,18 +33,14 @@ export function isCommitId(v: unknown): v is string {
 
 const sameCommit = (a: string, b: string) => a === b || (a.length !== b.length && (a.startsWith(b) || b.startsWith(a)))
 
-export async function git(io: Io, root: string, args: string[]): Promise<string | undefined> {
-  const r = await io.run(['git', '-c', 'core.fsmonitor=false', '-c', 'core.untrackedCache=false', ...args], {
-    cwd: root,
-    timeoutMs: GIT_BUDGET_MS,
-    env: { GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0', LC_ALL: 'C' },
-  })
-  return r.exitCode === 0 && !r.timedOut ? r.stdout.trim() : undefined
+/** Through the shared git runner (mods/git.ts); `timeoutMs` is what is left of the session-start deadline. */
+export async function git(io: Io, root: string, args: string[], timeoutMs = GIT_BUDGET_MS): Promise<string | undefined> {
+  return gitOutput(io, root, args, Math.min(GIT_BUDGET_MS, timeoutMs))
 }
 
 /** HEAD as 40 hex digits, through git; undefined outside a repository or without git. */
-export async function headCommit(io: Io, root: string): Promise<string | undefined> {
-  const h = await git(io, root, ['rev-parse', '--verify', '--quiet', 'HEAD'])
+export async function headCommit(io: Io, root: string, timeoutMs = GIT_BUDGET_MS): Promise<string | undefined> {
+  const h = await git(io, root, ['rev-parse', '--verify', '--quiet', 'HEAD'], timeoutMs)
   return h && /^[0-9a-f]{40}$/.test(h) ? h : undefined
 }
 
@@ -52,14 +49,14 @@ export async function headFromFiles(io: Io, root: string): Promise<string | unde
   const gitDir = join(root, '.git')
   const st = await io.stat(gitDir).catch(() => undefined)
   if (st?.kind !== 'dir') return undefined
-  const head = (await io.readRange(join(gitDir, 'HEAD'), 0, 512).catch(() => undefined))?.trim()
+  const head = (await readSafe(io, join(gitDir, 'HEAD'), { maxBytes: 512, root }))?.trim()
   if (!head) return undefined
   if (/^[0-9a-f]{40}$/.test(head)) return head
   const m = /^ref: (refs\/[\w./-]{1,200})$/.exec(head)
   if (!m || m[1]!.split('/').includes('..')) return undefined
-  const loose = (await io.readRange(join(gitDir, m[1]!), 0, 128).catch(() => undefined))?.trim()
+  const loose = (await readSafe(io, join(gitDir, m[1]!), { maxBytes: 128, root }))?.trim()
   if (loose && /^[0-9a-f]{40}$/.test(loose)) return loose
-  const packed = await io.readRange(join(gitDir, 'packed-refs'), 0, 4 * 1024 * 1024).catch(() => undefined)
+  const packed = await readSafe(io, join(gitDir, 'packed-refs'), { maxBytes: 4 * 1024 * 1024, root })
   if (!packed) return undefined
   for (const line of packed.split('\n')) {
     const [sha, ref] = line.trim().split(' ')
@@ -71,11 +68,11 @@ export async function headFromFiles(io: Io, root: string): Promise<string | unde
 export type Drift = { commit: string; head: string; behind?: number; changed: string[] }
 
 /** How far HEAD is from `commit` (validated first; undefined when there is nothing true to say). */
-export async function driftSince(io: Io, root: string, commit: unknown, head: string): Promise<Drift | undefined> {
+export async function driftSince(io: Io, root: string, commit: unknown, head: string, timeoutMs = GIT_BUDGET_MS): Promise<Drift | undefined> {
   if (!isCommitId(commit) || !/^[0-9a-f]{40}$/.test(head) || sameCommit(commit, head)) return undefined
-  const count = await git(io, root, ['rev-list', '--count', `${commit}..${head}`])
+  const count = await git(io, root, ['rev-list', '--count', `${commit}..${head}`], timeoutMs / 2)
   const behind = count !== undefined && /^\d{1,9}$/.test(count) ? Number(count) : undefined
-  const listing = await git(io, root, ['diff', '--name-only', '--no-renames', commit, head, '--'])
+  const listing = await git(io, root, ['diff', '--no-ext-diff', '--no-textconv', '--name-only', '--no-renames', commit, head, '--'], timeoutMs / 2)
   const changed = listing === undefined ? [] : topLevelFolders(listing)
   if (behind === undefined && listing === undefined) return undefined
   if (behind === 0 && changed.length === 0) return undefined
@@ -117,10 +114,7 @@ export function movedLine(from: string, to: string): string {
 /** The extension's committed index metadata, read as hostile input (only its commit is used). */
 export async function extensionCommit(io: Io, root: string): Promise<string | undefined> {
   const p = join(root, EXTENSION_META)
-  const st = await io.stat(p).catch(() => undefined)
-  if (!st || st.kind !== 'file' || st.size > 64 * 1024) return undefined
-  if (await io.isLink?.(p).catch(() => true)) return undefined
-  const text = await io.readText(p)
+  const text = await readSafe(io, p, { maxBytes: 64 * 1024, root })
   try {
     const v = JSON.parse(text ?? '') as { commit?: unknown }
     return isCommitId(v?.commit) ? v.commit : undefined

@@ -66,6 +66,6 @@ export function normalizeConfig(raw: unknown): LiteConfig {
 }
 
 export async function loadConfig(io: Io, root: string): Promise<{ config: LiteConfig; error?: string; found: boolean }> {
-  const { value, error } = await readJson<unknown>(io, join(root, CONFIG_PATH))
+  const { value, error } = await readJson<unknown>(io, join(root, CONFIG_PATH), { maxBytes: 256 * 1024, root })
   return { config: normalizeConfig(value), error, found: value !== undefined || error !== undefined }
 }

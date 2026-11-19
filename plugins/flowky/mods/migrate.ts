@@ -33,7 +33,7 @@
 // consents without per-kind checks dropped, as 0.2.2 already ignored them.
 
 import type { Io } from './io'
-import { join, readJson } from './io'
+import { join, readJson, readSafe } from './io'
 import { trustedClaudeDir } from './home'
 import { currentStamp, stampConfigured, stateDir, writeStateText } from './state'
 
@@ -74,7 +74,7 @@ export type MigrationRecord = {
 }
 
 export async function readMigration(io: Io, root: string): Promise<MigrationRecord | undefined> {
-  const { value } = await readJson<MigrationRecord>(io, join(stateDir(io, root), MIGRATION_FILE))
+  const { value } = await readJson<MigrationRecord>(io, join(stateDir(io, root), MIGRATION_FILE), { root })
   return value && typeof value === 'object' && value.version === 1 ? value : undefined
 }
 
@@ -138,7 +138,7 @@ export async function migrateProjectState(io: Io, root: string): Promise<Migrati
           skip('no stamp to check it against: not trusted')
           continue
         }
-        const text = await io.readText(from)
+        const text = await readSafe(io, from, { maxBytes: 4 * 1024 * 1024, root })
         let value: unknown
         try {
           value = text === undefined ? undefined : JSON.parse(text)

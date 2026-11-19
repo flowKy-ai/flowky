@@ -19,7 +19,7 @@
 //   }
 
 import type { Io } from '../io'
-import { join, readJson } from '../io'
+import { join, readJson, readSafe } from '../io'
 import { CONFIG_PATH } from '../paths'
 
 export type GuardMode = 'pause-once' | 'note' | 'off'
@@ -83,9 +83,7 @@ export function normalizeGuardrails(raw: unknown): GuardrailsConfig {
 }
 
 export async function loadGuardrails(io: Io, root: string): Promise<GuardrailsConfig> {
-  const st = await io.stat(join(root, CONFIG_PATH)).catch(() => undefined)
-  if (!st || st.kind !== 'file' || st.size > 256 * 1024) return defaultGuardrails()
-  const { value } = await readJson<unknown>(io, join(root, CONFIG_PATH))
+  const { value } = await readJson<unknown>(io, join(root, CONFIG_PATH), { maxBytes: 256 * 1024, root })
   return normalizeGuardrails(value)
 }
 
@@ -129,9 +127,7 @@ export async function findOldGuard(io: Io, root: string): Promise<OldGuard[]> {
   const out: OldGuard[] = []
   for (const file of PROJECT_SETTINGS) {
     const p = join(root, file)
-    const st = await io.stat(p).catch(() => undefined)
-    if (!st || st.kind !== 'file' || st.size > 1024 * 1024) continue
-    const events = oldGuardEvents(await io.readText(p))
+    const events = oldGuardEvents(await readSafe(io, p, { maxBytes: 1024 * 1024, root }))
     if (events.length) out.push({ file, events })
   }
   return out

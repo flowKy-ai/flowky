@@ -65,3 +65,25 @@ test('the only model call is the documented one: $.model.complete in hooks/regis
   // The command hooks (dist) never call a model at all.
   assert.doesNotMatch(readFileSync(join(ROOT, 'dist', 'hook.mjs'), 'utf8'), /\.model\.complete\s*\(/)
 })
+
+// Review F9: what the scan above cannot see. A computed require or import, a child process, or a
+// program other than git would each be a way to reach the network without importing a module.
+// Allowed by design: the Node driver itself (cli/node-io.ts, which starts the programs), the shared
+// git runner (mods/git.ts, the only caller of io.run in the shared core), and FlowKy Pro's
+// documented exceptions (its verifier, exception 1 above, and its consented project TypeScript).
+const RUN_ALLOWED = new Set(['cli/node-io.ts', 'mods/git.ts', 'mods/verifier.ts'])
+const REQUIRE_ALLOWED = new Set(['hooks/pro-node-io.ts'])
+
+test('no computed require or import, no child process outside the driver, and io.run only in the git runner', () => {
+  const hits = []
+  for (const f of shipped().filter(f => f !== 'dist/hook.mjs')) {
+    const text = readFileSync(join(ROOT, f), 'utf8').split('\n').filter(l => !/^\s*(\/\/|\*)/.test(l)).join('\n')
+    if (/\bcreateRequire\b/.test(text) && !REQUIRE_ALLOWED.has(f)) hits.push(`${f}: createRequire`)
+    for (const m of text.matchAll(/\bimport\s*\(\s*([^'"\s)][^)]*)\)/g)) hits.push(`${f}: import(${m[1]})`)
+    if (/['"](node:)?child_process['"]/.test(text) && f !== 'cli/node-io.ts') hits.push(`${f}: child_process`)
+    if (/\.run\s*\(/.test(text) && !RUN_ALLOWED.has(f)) hits.push(`${f}: io.run outside the git runner`)
+  }
+  assert.deepEqual(hits, [])
+  const dist = readFileSync(join(ROOT, 'dist', 'hook.mjs'), 'utf8')
+  assert.doesNotMatch(dist, /\bcreateRequire\b/)
+})

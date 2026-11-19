@@ -26,7 +26,7 @@
 // passed through text.ts (no control characters, one line, capped): never more file content.
 
 import type { Io } from '../io'
-import { join } from '../io'
+import { join, readSafe } from '../io'
 import type { Decision, ToolCall } from './events'
 import type { GuardrailsConfig } from './settings'
 import type { SymbolLookup } from './symbol-index'
@@ -81,12 +81,9 @@ export function worthFlagging(name: string, cfg: GuardrailsConfig): boolean {
   return name.length >= MIN_NAME_LENGTH && !IGNORED_NAMES.has(name) && !cfg.duplicateGuard.ignore.has(name)
 }
 
+/** A source file of the project: never through a link, never outside the root by real path (F7). */
 async function readSource(io: Io, root: string, rel: string): Promise<string | undefined> {
-  const p = join(root, rel)
-  const st = await io.stat(p).catch(() => undefined)
-  if (!st || st.kind !== 'file' || st.size > MAX_SOURCE_BYTES) return undefined
-  if (await io.isLink?.(p).catch(() => true)) return undefined
-  return io.readText(p)
+  return readSafe(io, join(root, rel), { maxBytes: MAX_SOURCE_BYTES, root })
 }
 
 /** The definition of `name` in `rel` as it is on disk now, when it is a reusable source definition. */

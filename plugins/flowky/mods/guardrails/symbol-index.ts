@@ -24,7 +24,7 @@
 // before it names it (dup-guard.ts). A forged row can therefore hide a duplicate, never invent one.
 
 import type { Io } from '../io'
-import { join } from '../io'
+import { join, readSafe } from '../io'
 import type { Scan } from '../project-map'
 import { STATE_DIR, writeStateText } from '../state'
 import type { Definition, Kind, Lang } from './symbols'
@@ -98,11 +98,9 @@ function parseFiles(text: string | undefined): Map<string, FileEntry> {
   return out
 }
 
-async function readCapped(io: Io, path: string, max: number): Promise<string | undefined> {
-  const st = await io.stat(path).catch(() => undefined)
-  if (!st || st.kind !== 'file' || st.size > max) return undefined
-  if (await io.isLink?.(path).catch(() => true)) return undefined
-  return io.readText(path)
+/** Every read of this module: the shared reader, inside the project by real path (F1, F7). */
+async function readCapped(io: Io, root: string, path: string, max: number): Promise<string | undefined> {
+  return readSafe(io, path, { maxBytes: max, root })
 }
 
 export function parseMeta(value: unknown): IndexMeta | undefined {
@@ -125,7 +123,7 @@ export function parseMeta(value: unknown): IndexMeta | undefined {
 }
 
 export async function readMeta(io: Io, root: string): Promise<IndexMeta | undefined> {
-  const text = await readCapped(io, join(root, STATE_DIR, INDEX_FILES.meta), 64 * 1024)
+  const text = await readCapped(io, root, join(root, STATE_DIR, INDEX_FILES.meta), 64 * 1024)
   if (!text) return undefined
   try {
     return parseMeta(JSON.parse(text))
@@ -138,7 +136,7 @@ type Recent = Record<string, { hash: string; rows: IndexRow[]; at: number }>
 
 async function readRecent(io: Io, root: string): Promise<Map<string, { hash: string; rows: IndexRow[]; at: number }>> {
   const out = new Map<string, { hash: string; rows: IndexRow[]; at: number }>()
-  const text = await readCapped(io, join(root, STATE_DIR, INDEX_FILES.recent), 2 * 1024 * 1024)
+  const text = await readCapped(io, root, join(root, STATE_DIR, INDEX_FILES.recent), 2 * 1024 * 1024)
   if (!text) return out
   let parsed: unknown
   try {
@@ -164,7 +162,7 @@ export type SymbolLookup = {
 
 /** The index as the duplicate guard reads it: the built rows, overlaid with the files written this session. */
 export async function loadIndex(io: Io, root: string): Promise<SymbolLookup> {
-  const rows = parseRows(await readCapped(io, join(root, STATE_DIR, INDEX_FILES.symbols), MAX_INDEX_BYTES))
+  const rows = parseRows(await readCapped(io, root, join(root, STATE_DIR, INDEX_FILES.symbols), MAX_INDEX_BYTES))
   const recent = await readRecent(io, root)
   const byName = new Map<string, IndexRow[]>()
   const add = (r: IndexRow) => {
@@ -188,13 +186,10 @@ function rowsOf(path: string, defs: Definition[], hash: string): IndexRow[] {
 }
 
 /** Reads and parses one source file; undefined when it is not a source file to index. */
-export async function parseSourceFile(io: Io, root: string, rel: string, opts: { fromScan?: boolean } = {}): Promise<{ rows: IndexRow[]; hash: string } | undefined> {
+export async function parseSourceFile(io: Io, root: string, rel: string): Promise<{ rows: IndexRow[]; hash: string } | undefined> {
   if (!PATH_RE.test(rel) || classifyPath(rel) !== 'source') return undefined
   const lang = languageOf(rel)
-  // A file from the tree scan is a plain file already (the scan lists links as "other" and skips
-  // them) and its size is checked by the caller: one read instead of three calls.
-  const text = opts.fromScan ? await io.readText(join(root, rel)) : await readCapped(io, join(root, rel), MAX_SOURCE_BYTES)
-  if (text !== undefined && text.length > MAX_SOURCE_BYTES) return undefined
+  const text = await readCapped(io, root, join(root, rel), MAX_SOURCE_BYTES)
   if (text === undefined) return undefined
   const hash = digest(text)
   if (looksGenerated(text)) return { rows: [], hash }
@@ -214,9 +209,9 @@ export async function buildIndex(io: Io, root: string, scan: Scan, opts: { commi
   const candidates = scan.files
     .filter(f => PATH_RE.test(f.path) && f.size <= MAX_SOURCE_BYTES && classifyPath(f.path) === 'source')
     .slice(0, maxFiles)
-  const prevFiles = parseFiles(await readCapped(io, join(root, STATE_DIR, INDEX_FILES.files), MAX_INDEX_BYTES))
+  const prevFiles = parseFiles(await readCapped(io, root, join(root, STATE_DIR, INDEX_FILES.files), MAX_INDEX_BYTES))
   const prevRows = new Map<string, IndexRow[]>()
-  for (const r of parseRows(await readCapped(io, join(root, STATE_DIR, INDEX_FILES.symbols), MAX_INDEX_BYTES))) {
+  for (const r of parseRows(await readCapped(io, root, join(root, STATE_DIR, INDEX_FILES.symbols), MAX_INDEX_BYTES))) {
     let b = prevRows.get(r.path)
     if (!b) prevRows.set(r.path, (b = []))
     b.push(r)
@@ -238,8 +233,12 @@ export async function buildIndex(io: Io, root: string, scan: Scan, opts: { commi
         const mtime = Math.round(f.mtimeMs ?? -1)
         const prev = prevFiles.get(f.path)
         if (prev && prev.size === f.size && prev.mtime === mtime && mtime >= 0) return { f, kind: 'reused' as const, entry: prev }
-        if (outOfTime) return { f, kind: 'skipped' as const }
-        const one = await parseSourceFile(io, root, f.path, { fromScan: true })
+        // The deadline is checked for each file, not once per batch (review F2).
+        if (outOfTime || (await io.now()) > deadline) {
+          outOfTime = true
+          return { f, kind: 'skipped' as const }
+        }
+        const one = await parseSourceFile(io, root, f.path)
         return one ? { f, kind: 'parsed' as const, entry: { size: f.size, mtime, hash: one.hash }, rows: one.rows } : { f, kind: 'none' as const }
       }),
     )
@@ -276,12 +275,12 @@ export async function buildIndex(io: Io, root: string, scan: Scan, opts: { commi
   const symbolsText = `# FlowKy plugin symbol index (generated; never edit; safe to delete): name\tkind\tpath\tline\texported\thash\n${rows.map(tsvRow).join('\n')}${rows.length ? '\n' : ''}`
   const filesText = `# FlowKy plugin index files: path\tsize\tmtime\thash\n${[...files].map(([p, e]) => `${p}\t${e.size}\t${e.mtime}\t${e.hash}`).join('\n')}${files.size ? '\n' : ''}`
   let written = false
-  const current = await readCapped(io, join(root, STATE_DIR, INDEX_FILES.symbols), MAX_INDEX_BYTES)
+  const current = await readCapped(io, root, join(root, STATE_DIR, INDEX_FILES.symbols), MAX_INDEX_BYTES)
   if (current !== symbolsText) {
     await writeStateText(io, root, INDEX_FILES.symbols, symbolsText)
     written = true
   }
-  if ((await readCapped(io, join(root, STATE_DIR, INDEX_FILES.files), MAX_INDEX_BYTES)) !== filesText) await writeStateText(io, root, INDEX_FILES.files, filesText)
+  if ((await readCapped(io, root, join(root, STATE_DIR, INDEX_FILES.files), MAX_INDEX_BYTES)) !== filesText) await writeStateText(io, root, INDEX_FILES.files, filesText)
   await writeStateText(io, root, INDEX_FILES.meta, JSON.stringify(meta, null, 2) + '\n')
   // What the session wrote is in the rows now, unless the build ran out of time before that file.
   const recent = await readRecent(io, root)

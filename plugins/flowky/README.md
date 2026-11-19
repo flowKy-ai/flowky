@@ -136,7 +136,17 @@ SessionStart hook therefore writes only inside the project's ignored `.flowky/ca
   start `git rev-parse HEAD`, and when the extension's map exists `git rev-list --count` and
   `git diff --name-only` between two commits (2 s each, no fetch, no network, the stored commit
   accepted only as plain hex); the health check runs `git ls-files` to flag plugin files committed
-  in the repository.
+  in the repository. Every git call switches off what a folder's own git configuration could make
+  git run (file-system monitor, pager, hooks, external diff and text conversion, credential
+  helpers, every transport, so no lazy fetch either), ignores inherited `GIT_*` variables, and
+  never uses a git found inside the project folder.
+- Every file the plugin reads from a project is read the same way: a plain file only (never through
+  a symbolic link or junction, never a device or a pipe), size-capped, and inside the project by
+  real path. Session start has one 8 s deadline shared by the map, the index, git and the doctor.
+- The loop breaker keeps, per session in `.flowky/cache/guard/`, a digest of each failing command and
+  the first error line of its output (at most 300 characters, so it can hold whatever the command
+  printed there). That line is erased after 24 hours, the session file after 7 days (30 sessions
+  at most); the folder is never committed and is safe to delete.
 - The duplicate guard reads the source files of the project to index their top-level definitions,
   and, before it names one, the line of that file again. What reaches Claude is a file name, a line
   number, a name and that one line, stripped of control characters and cut short.

@@ -14,7 +14,7 @@
 // made only when the plugin could also write down that it made it; otherwise it would repeat.
 
 import type { Io } from '../mods/io'
-import { join } from '../mods/io'
+import { join, readSafe } from '../mods/io'
 import type { Scan } from '../mods/project-map'
 import { scanTree } from '../mods/project-map'
 import { readState, writeState, writeStateText } from '../mods/state'
@@ -29,6 +29,7 @@ import { pruneGuardSessions, readSession, withSession } from '../mods/guardrails
 import { driftSince, extensionCommit, headCommit, headFromFiles, movedLine, startLine } from '../mods/guardrails/staleness'
 import { doctorReport, gatherDoctorInputs, runDoctor, summaryLine } from '../mods/guardrails/config-doctor'
 import { clean, relativeTo } from '../mods/guardrails/text'
+import { classifyPath } from '../mods/guardrails/symbols'
 import { withLock } from '../mods/state'
 import { PLUGIN } from './identity'
 
@@ -59,7 +60,7 @@ export function isRetryOrder(text: string): boolean {
 // ---- session start ----
 
 async function lastDoctorRun(io: Io, root: string): Promise<number | undefined> {
-  const text = await io.readRange(join(root, '.flowky/cache/guard/doctor.json'), 0, 256).catch(() => undefined)
+  const text = await readSafe(io, join(root, '.flowky/cache/guard/doctor.json'), { maxBytes: 256, root })
   try {
     const at = (JSON.parse(text ?? '') as { at?: unknown }).at
     return typeof at === 'number' && Number.isFinite(at) ? at : undefined
@@ -68,20 +69,30 @@ async function lastDoctorRun(io: Io, root: string): Promise<number | undefined> 
   }
 }
 
-export type StartFacts = { scan?: Scan; source?: string }
+/**
+ * One deadline for the whole SessionStart hook (review F2/F5): the map, the index, the git calls
+ * and the doctor summary each take what is left of it, so the hook ends well before Claude Code's
+ * 15 s timeout and its output (the map and the line) is never lost.
+ */
+export const SESSION_START_BUDGET_MS = 8000
+
+export type StartFacts = { scan?: Scan; source?: string; deadline?: number }
 
 /** Index build, staleness line and the daily doctor summary. `scan`: the project map's scan, reused. */
 export async function guardrailsAtStart(io: Io, ev: Extract<AgentEvent, { kind: 'sessionStart' }>, facts: StartFacts = {}): Promise<Decision> {
   const root = ev.root
+  const deadline = facts.deadline ?? (await io.now()) + SESSION_START_BUDGET_MS
+  const left = async () => deadline - (await io.now())
   return failOpen(io, root, 'sessionStart', async () => {
     const cfg = await loadGuardrails(io, root)
     const old = await findOldGuard(io, root)
     await pruneGuardSessions(io, root).catch(() => undefined)
-    const head = await headCommit(io, root)
+    const head = (await left()) > 300 ? await headCommit(io, root, Math.min(2000, (await left()) - 200)) : undefined
     let own
-    if (cfg.duplicateGuard.mode !== 'off' && !old.length) {
-      const scan = facts.scan && !facts.scan.partial ? facts.scan : await scanTree(io, root, INDEX_BUDGET_MS, INDEX_MAX_FILES)
-      own = (await buildIndex(io, root, scan, { commit: head ?? null })).meta
+    if (cfg.duplicateGuard.mode !== 'off' && !old.length && (await left()) > 1000) {
+      // The map's scan is reused when it covered the tree; otherwise a scan of source files only.
+      const scan = facts.scan && !facts.scan.partial ? facts.scan : await scanTree(io, root, Math.min(INDEX_BUDGET_MS, (await left()) - 1000), INDEX_MAX_FILES, { keep: p => classifyPath(p) === 'source' })
+      own = (await buildIndex(io, root, scan, { commit: head ?? null, budgetMs: Math.max(0, Math.min(INDEX_BUDGET_MS, (await left()) - 800)) })).meta
     }
     if (head) await withSession(io, root, ev.session, s => {
       if (!s.head || ev.source !== 'compact') s.head = head
@@ -89,18 +100,18 @@ export async function guardrailsAtStart(io: Io, ev: Extract<AgentEvent, { kind: 
     const parts: Decision[] = []
     if (cfg.staleness.enabled && !old.length) {
       const extCommit = head ? await extensionCommit(io, root) : undefined
-      const extension = extCommit && head ? await driftSince(io, root, extCommit, head) : undefined
+      const extension = extCommit && head && (await left()) > 400 ? await driftSince(io, root, extCommit, head, Math.min(4000, (await left()) - 300)) : undefined
       const line = startLine({ own, extension })
       if (line) parts.push({ contextForAgent: line })
     }
-    if (cfg.configDoctor.sessionSummary && ev.source === 'startup') {
+    if (cfg.configDoctor.sessionSummary && ev.source === 'startup' && (await left()) > 1500) {
       // Display-only and unstamped (it may be written before the folder is trusted): a forged file
       // can only make the daily summary quieter.
       const last = await lastDoctorRun(io, root)
       const now = await io.now()
       if (last === undefined || now - last > DOCTOR_EVERY_MS || last > now) {
         await writeStateText(io, root, 'guard/doctor.json', JSON.stringify({ at: now }) + '\n').catch(() => undefined)
-        const inputs = await gatherDoctorInputs(io, root)
+        const inputs = await gatherDoctorInputs(io, root, { timeMs: Math.max(100, ((await left()) - 500) / 2) })
         const line = summaryLine(await runDoctor(inputs), DOCTOR_COMMAND)
         if (line) parts.push({ messageForUser: line })
       }

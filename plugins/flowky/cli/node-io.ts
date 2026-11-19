@@ -12,12 +12,11 @@
 
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { promises as fs } from 'node:fs'
-import { createRequire } from 'node:module'
+import { constants as fsc, promises as fs } from 'node:fs'
 import { homedir } from 'node:os'
 import { delimiter, dirname, isAbsolute, join as pathJoin, relative, resolve, sep } from 'node:path'
 
-import type { Entry, Io, RunOptions, RunResult, Stat } from '../mods/io'
+import type { Entry, Io, ReadOptions, RunOptions, RunResult, Stat } from '../mods/io'
 import { HOME_DIR_NAME } from '../mods/paths'
 
 function kindOf(s: { isFile(): boolean; isDirectory(): boolean }): Entry['kind'] {
@@ -27,8 +26,16 @@ function kindOf(s: { isFile(): boolean; isDirectory(): boolean }): Entry['kind']
 const WIN = process.platform === 'win32'
 const same = (a: string, b: string) => (WIN ? a.toLowerCase() === b.toLowerCase() : a === b)
 
-/** Resolves a program to an absolute path without ever looking in `cwd`; undefined when not found. */
-export async function resolveProgram(cmd: string, cwd: string | undefined, env: NodeJS.ProcessEnv = process.env): Promise<string | undefined> {
+const inside = (dir: string, folder: string) => {
+  const rel = relative(resolve(folder), resolve(dir))
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))
+}
+
+/**
+ * Resolves a program to an absolute path without ever looking in `cwd`; undefined when not found.
+ * With `outside`, a PATH entry in that folder or below it is skipped too (a repository's own git).
+ */
+export async function resolveProgram(cmd: string, cwd: string | undefined, env: NodeJS.ProcessEnv = process.env, outside?: string): Promise<string | undefined> {
   if (isAbsolute(cmd)) return cmd
   if (cmd.includes('/') || cmd.includes('\\')) return undefined // a relative path would be read from the working folder
   const name = cmd.toLowerCase()
@@ -46,6 +53,7 @@ export async function resolveProgram(cmd: string, cwd: string | undefined, env: 
     const entry = raw.trim().replace(/^"(.*)"$/, '$1')
     if (!entry || !isAbsolute(entry)) continue
     if (work && same(resolve(entry), work)) continue
+    if (outside && inside(WIN ? entry.toLowerCase() : entry, WIN ? outside.toLowerCase() : outside)) continue
     for (const e of exts) {
       const candidate = pathJoin(entry, cmd + e)
       const st = await fs.stat(candidate).catch(() => undefined)
@@ -105,27 +113,64 @@ async function renameInto(tmp: string, target: string): Promise<void> {
 
 const tmpName = (target: string) => `${target}.tmp-${process.pid}-${Math.random().toString(36).slice(2, 10)}`
 
+/** Cap of the plain readText: no file the plugin reads is this large. */
+const TEXT_CAP_BYTES = 16 * 1024 * 1024
+
+/**
+ * The strict read: lstat says a regular file (a symbolic link, a junction, a device, a pipe or a
+ * folder is refused), the size fits, the real folder is inside `root` when given, and the file is
+ * opened non-blocking and without following a link, then checked again on the open handle.
+ */
+async function strictRead(path: string, o: ReadOptions, realCache: Map<string, string>): Promise<string | undefined> {
+  const real = async (p: string) => {
+    let r = realCache.get(p)
+    if (r === undefined) {
+      r = await fs.realpath(p)
+      realCache.set(p, r)
+    }
+    return r
+  }
+  let handle: Awaited<ReturnType<typeof fs.open>> | undefined
+  try {
+    const st = await fs.lstat(path)
+    if (!st.isFile()) return undefined
+    const offset = Math.max(0, o.offset ?? 0)
+    const avail = Math.max(0, st.size - offset)
+    if (avail > o.maxBytes && !o.partial) return undefined
+    if (o.root) {
+      const rel = relative(await real(resolve(o.root)), await real(dirname(resolve(path))))
+      if (rel.startsWith('..') || isAbsolute(rel)) return undefined
+    }
+    handle = await fs.open(path, fsc.O_RDONLY | (fsc.O_NONBLOCK ?? 0) | (fsc.O_NOFOLLOW ?? 0))
+    const hs = await handle.stat()
+    if (!hs.isFile() || (hs.ino && st.ino && hs.ino !== st.ino)) return undefined
+    const buf = Buffer.alloc(Math.min(o.maxBytes, avail))
+    let read = 0
+    while (read < buf.length) {
+      const { bytesRead } = await handle.read(buf, read, buf.length - read, offset + read)
+      if (bytesRead <= 0) break
+      read += bytesRead
+    }
+    return buf.subarray(0, read).toString('utf8')
+  } catch {
+    return undefined
+  } finally {
+    await handle?.close().catch(() => undefined)
+  }
+}
+
 export function nodeIo(): Io {
+  const realCache = new Map<string, string>()
   return {
+    async readFile(path, opts) {
+      return strictRead(path, opts, realCache)
+    },
+    // The plain primitives get the same refusals (no link, no special file), with a 16 MB cap.
     async readText(path) {
-      try {
-        return await fs.readFile(path, 'utf8')
-      } catch {
-        return undefined
-      }
+      return strictRead(path, { maxBytes: TEXT_CAP_BYTES }, realCache)
     },
     async readRange(path, offset, bytes) {
-      let handle: Awaited<ReturnType<typeof fs.open>> | undefined
-      try {
-        handle = await fs.open(path, 'r')
-        const buf = Buffer.alloc(Math.max(0, bytes))
-        const { bytesRead } = await handle.read(buf, 0, buf.length, offset)
-        return buf.subarray(0, bytesRead).toString('utf8')
-      } catch {
-        return undefined
-      } finally {
-        await handle?.close()
-      }
+      return strictRead(path, { maxBytes: Math.max(0, bytes), offset, partial: true }, realCache)
     },
     async list(dir) {
       const entries = await fs.readdir(dir, { withFileTypes: true })
@@ -154,20 +199,19 @@ export function nodeIo(): Io {
         return undefined
       }
     },
-    async remove(path) {
-      const st = await fs.lstat(path).catch(() => undefined)
-      if (st && !st.isDirectory()) await fs.rm(path, { force: true })
-    },
     async run(argv: readonly string[], options: RunOptions): Promise<RunResult> {
       const [cmd, ...args] = argv
       if (!cmd) return { exitCode: -1, stdout: '', stderr: 'empty command', notFound: true }
-      const env: NodeJS.ProcessEnv = options.env ? { ...process.env, ...options.env } : { ...process.env }
+      const env: NodeJS.ProcessEnv = { ...process.env }
+      // A variable a repository could set through its Claude Code settings (GIT_DIR, GIT_CONFIG_*...).
+      if (options.dropEnv?.length) for (const k of Object.keys(env)) if (options.dropEnv.some(p => k.toUpperCase().startsWith(p.toUpperCase()))) delete env[k]
+      if (options.env) Object.assign(env, options.env)
       // cmd.exe itself looks in the current folder before PATH unless this is set.
       if (WIN) env.NoDefaultCurrentDirectoryInExePath = '1'
       // The child (cmd.exe, npm, a compiler) searches PATH too: hand it only absolute entries, never
       // an empty or relative one, nor the working folder, which would make it look in the repository.
       sanitizePath(env, options.cwd)
-      const program = await resolveProgram(cmd, options.cwd, env)
+      const program = await resolveProgram(cmd, options.cwd, env, options.programOutside)
       if (!program) return { exitCode: -1, stdout: '', stderr: `${cmd} not found on PATH (the working folder is never searched)`, notFound: true }
       return new Promise(resolvePromise => {
         let stdout = ''
@@ -289,13 +333,6 @@ export function nodeIo(): Io {
       if (configured) return configured.replace(/\\/g, '/')
       const home = homedir()
       return home ? pathJoin(home, HOME_DIR_NAME).replace(/\\/g, '/') : undefined
-    },
-    loadProjectModule(root, name) {
-      try {
-        return createRequire(pathJoin(root, 'package.json'))(name) as unknown
-      } catch {
-        return undefined
-      }
     },
     platform: process.platform === 'win32' ? 'windows' : process.platform === 'darwin' ? 'macos' : process.platform === 'linux' ? 'linux' : 'other',
   }

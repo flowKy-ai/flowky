@@ -22,7 +22,7 @@
 // stamp or none is read as absent and reported to the doctor as foreign.
 
 import type { Io } from './io'
-import { join, readJson } from './io'
+import { join, readJson, readSafe } from './io'
 import { STATE_DIR } from './paths'
 
 export { STATE_DIR }
@@ -64,7 +64,7 @@ const UNSTAMPED_OK = new Set(['status'])
 /** Writes .flowky/cache/.gitignore ("*") when it is missing or was changed. */
 export async function ensureIgnored(io: Io, root: string): Promise<void> {
   const p = join(stateDir(io, root), '.gitignore')
-  if ((await io.readText(p)) === STATE_GITIGNORE) return
+  if ((await readSafe(io, p, { maxBytes: 4096, root })) === STATE_GITIGNORE) return
   if (!io.writeInside) throw new Error('this driver cannot write safely')
   await io.writeInside(root, p, STATE_GITIGNORE)
 }
@@ -78,7 +78,7 @@ export async function writeStateText(io: Io, root: string, file: string, text: s
 }
 
 export async function readState<T extends object>(io: Io, root: string, name: string, fallback: T): Promise<T> {
-  const { value } = await readJson<T & { __stamp?: string }>(io, join(stateDir(io, root), `${name}.json`))
+  const { value } = await readJson<T & { __stamp?: string }>(io, join(stateDir(io, root), `${name}.json`), { root })
   if (!value || typeof value !== 'object' || Array.isArray(value)) return fallback
   const { __stamp, ...rest } = value
   if (stampProvider && !UNSTAMPED_OK.has(name)) {

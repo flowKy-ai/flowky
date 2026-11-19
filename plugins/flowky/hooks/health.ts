@@ -4,7 +4,9 @@
 // changes anything.
 
 import type { Io } from '../mods/io'
-import { join, kilo } from '../mods/io'
+import { join, kilo, readSafe } from '../mods/io'
+import { runGit } from '../mods/git'
+import { inline } from '../mods/guardrails/text'
 import { CONFIG_PATH, loadConfig } from '../mods/config'
 import { LEGACY_MAP_PATH, MAP_PATH, fingerprintOf } from '../mods/project-map'
 import { STATE_DIR, STATE_GITIGNORE, readState, stateDir } from '../mods/state'
@@ -41,7 +43,7 @@ export async function healthReport(io: Io, root: string, facts: HealthFacts): Pr
   lines.push(
     `Config ${CONFIG_PATH}: ${error ? `BROKEN, defaults in force (${error})` : found ? 'found and valid' : 'not present, defaults in force'}`,
   )
-  const ignoredOk = (await io.readText(join(stateDir(io, root), '.gitignore'))) === STATE_GITIGNORE
+  const ignoredOk = (await readSafe(io, join(stateDir(io, root), '.gitignore'), { maxBytes: 4096, root })) === STATE_GITIGNORE
   lines.push(`State folder: ${stateDir(io, root)} (map and small JSON files; ${ignoredOk ? 'its own .gitignore ("*") keeps it out of commits' : 'its .gitignore ("*") is written at the next hook'}; safe to delete). Nothing else in .flowky/ is written by the plugin.`)
   const both = await bothEnabledLine(io, root).catch(() => undefined)
   if (both) lines.push(both)
@@ -56,7 +58,7 @@ export async function healthReport(io: Io, root: string, facts: HealthFacts): Pr
   )
 
   lines.push('')
-  const map = await io.readText(join(root, MAP_PATH))
+  const map = await readSafe(io, join(root, MAP_PATH), { maxBytes: 1024 * 1024, root })
   if (!config.map.enabled) lines.push('Project map: OFF (map.enabled is false in the config)')
   else {
     const m = status.map
@@ -79,8 +81,8 @@ export async function healthReport(io: Io, root: string, facts: HealthFacts): Pr
   lines.push('')
   lines.push(...(await guardrailsHealthLines(io, root).catch(() => ['Guardrails: their state could not be read'])))
   lines.push('')
-  const tracked = await io.run(['git', 'ls-files', '--', STATE_DIR, LEGACY_MAP_PATH, '.claude/handoff.md'], { cwd: root, timeoutMs: 3000 })
-  if (tracked.exitCode === 0 && tracked.stdout.trim()) lines.push(`FLAG: plugin files are committed in this repository (the plugin regenerates or ignores them; remove them from git): ${tracked.stdout.trim().split(/\r?\n/).slice(0, 6).join(', ')}`)
+  const tracked = await runGit(io, root, ['ls-files', '--', STATE_DIR, LEGACY_MAP_PATH, '.claude/handoff.md'], { timeoutMs: 3000 })
+  if (tracked.exitCode === 0 && tracked.stdout.trim()) lines.push(`FLAG: plugin files are committed in this repository (the plugin regenerates or ignores them; remove them from git): ${tracked.stdout.trim().split(/\r?\n/).slice(0, 6).map(n => inline(n, 120)).join(', ')}`)
   const moved = await migrationLines(io, root).catch(() => [])
   if (moved.length) lines.push('', ...moved)
   lines.push('')

@@ -83,7 +83,8 @@ type Pattern = { re: RegExp; kind: Kind; exported: (m: RegExpExecArray, name: st
 
 const PATTERNS: Record<Lang, Pattern[]> = {
   js: [
-    { re: /^(export\s+)?(?:default\s+)?(?:declare\s+)?(?:async\s+)?function\s*\*?\s*([A-Za-z_$][\w$]*)\s*[<(]/, kind: 'function', exported: m => Boolean(m[1]) },
+    // `function(?:\s*\*\s*|\s+)`: no two whitespace runs that can split the same spaces (that was quadratic).
+    { re: /^(export\s+)?(?:default\s+)?(?:declare\s+)?(?:async\s+)?function(?:\s*\*\s*|\s+)([A-Za-z_$][\w$]*)\s*[<(]/, kind: 'function', exported: m => Boolean(m[1]) },
     { re: /^(export\s+)?(?:default\s+)?(?:declare\s+)?(?:abstract\s+)?class\s+([A-Za-z_$][\w$]*)\b/, kind: 'class', exported: m => Boolean(m[1]) },
     { re: /^(export\s+)(?:const|let)\s+([A-Za-z_$][\w$]*)\s*(?::[^=]{1,200})?=\s*(?:async\s+)?(?:\(|function\b|[A-Za-z_$][\w$]*\s*=>|<)/, kind: 'function', exported: () => true },
   ],
@@ -99,6 +100,8 @@ const PATTERNS: Record<Lang, Pattern[]> = {
     { re: /^(pub(?:\s*\((?:crate|super)\))?\s+)(?:unsafe\s+)?trait\s+([A-Za-z_]\w*)/, kind: 'trait', exported: () => true },
   ],
 }
+
+const MATCH_CHARS = 300
 
 /** Lines inside Python triple-quoted strings and JS block comments are skipped (best effort). */
 function codeLines(text: string, lang: Lang): { line: string; n: number }[] {
@@ -127,8 +130,9 @@ function codeLines(text: string, lang: Lang): { line: string; n: number }[] {
         continue
       }
     }
-    if (raw.length > 2000) continue
-    out.push({ line: raw, n: i + 1 })
+    // Every pattern runs on at most the first 300 characters of a line: a definition's name is near
+    // its start, and no pattern then costs more than a bounded time, whatever the file holds.
+    out.push({ line: raw.length > MATCH_CHARS ? raw.slice(0, MATCH_CHARS) : raw, n: i + 1 })
   }
   return out
 }

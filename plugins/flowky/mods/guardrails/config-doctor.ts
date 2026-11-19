@@ -15,7 +15,7 @@
 // the line above a line ignores that check there; at most 30 findings, errors first.
 
 import type { Io } from '../io'
-import { join } from '../io'
+import { join, readSafe } from '../io'
 import { ALWAYS_SKIPPED } from '../gitignore'
 import { trustedClaudeDir } from '../home'
 import { PROJECT_SETTINGS, oldGuardAdvice, oldGuardEvents } from './settings'
@@ -41,11 +41,8 @@ const GENERAL_KNOWLEDGE = [/\breact hooks? (?:are|is|allow)\b/i, /\brest(?:ful)?
 
 // ---- reading the inputs ----
 
-async function readSmall(io: Io, path: string): Promise<string | undefined> {
-  const st = await io.stat(path).catch(() => undefined)
-  if (!st || st.kind !== 'file' || st.size > MAX_FILE_BYTES) return undefined
-  if (await io.isLink?.(path).catch(() => true)) return undefined
-  return io.readText(path)
+async function readSmall(io: Io, path: string, root?: string): Promise<string | undefined> {
+  return readSafe(io, path, { maxBytes: MAX_FILE_BYTES, root })
 }
 
 function rawFrontmatter(content: string): string | null {
@@ -71,18 +68,51 @@ export function importsOf(content: string): string[] {
   return out
 }
 
-export type DoctorInputs = { files: DoctorFile[]; settings: { path: string; text: string }[]; scripts?: Set<string>; makeTargets?: Set<string>; exists: (rel: string) => Promise<boolean> }
+export type DoctorInputs = {
+  files: DoctorFile[]
+  settings: { path: string; text: string }[]
+  scripts?: Set<string>
+  makeTargets?: Set<string>
+  exists: (rel: string) => Promise<boolean>
+  /** Why the doctor stopped early (a limit below was reached), said in its report. */
+  partial?: string
+  /** The clock and the deadline the checks respect too. */
+  now?: () => Promise<number>
+  deadline?: number
+}
+
+/** The doctor's work limits (review F4): total bytes read, files read, folder entries listed, time. */
+export const DOCTOR_LIMITS = { totalBytes: 1024 * 1024, files: 200, entries: 5000, timeMs: 3000 }
 
 /** Reads everything the doctor looks at. Nothing is written. */
-export async function gatherDoctorInputs(io: Io, root: string): Promise<DoctorInputs> {
+export async function gatherDoctorInputs(io: Io, root: string, opts: { timeMs?: number } = {}): Promise<DoctorInputs> {
   const files: DoctorFile[] = []
   const seen = new Set<string>()
+  const deadline = (await io.now()) + Math.min(opts.timeMs ?? DOCTOR_LIMITS.timeMs, DOCTOR_LIMITS.timeMs)
+  let partial: string | undefined
+  let bytes = 0
+  let listed = 0
+  const stop = async (): Promise<boolean> => {
+    if (partial) return true
+    if (files.length >= DOCTOR_LIMITS.files) partial = `${DOCTOR_LIMITS.files} files read`
+    else if (bytes >= DOCTOR_LIMITS.totalBytes) partial = `${DOCTOR_LIMITS.totalBytes / 1024} KB read`
+    else if (listed >= DOCTOR_LIMITS.entries) partial = `${DOCTOR_LIMITS.entries} folder entries listed`
+    else if ((await io.now()) > deadline) partial = `${DOCTOR_LIMITS.timeMs / 1000} s spent`
+    return partial !== undefined
+  }
+  const list = async (dir: string) => {
+    if (await stop()) return []
+    const entries = await io.list(dir).catch(() => [])
+    listed += entries.length
+    return entries
+  }
   const add = async (abs: string, display: string, role: DoctorFile['role']) => {
     const key = posix(abs).toLowerCase()
-    if (seen.has(key)) return
-    const text = await readSmall(io, abs)
+    if (seen.has(key) || (await stop())) return
+    const text = await readSmall(io, abs, display.startsWith('~/') ? undefined : root)
     if (text === undefined) return
     seen.add(key)
+    bytes += text.length
     files.push({ path: display, content: text.replace(/\r\n?/g, '\n'), role })
   }
   await add(join(root, 'CLAUDE.md'), 'CLAUDE.md', 'root-claude')
@@ -95,7 +125,7 @@ export async function gatherDoctorInputs(io: Io, root: string): Promise<DoctorIn
   let nested = 0
   const walk = async (rel: string, depth: number): Promise<void> => {
     if (depth > 4 || nested >= 200) return
-    const entries = await io.list(rel ? join(root, rel) : root).catch(() => [])
+    const entries = await list(rel ? join(root, rel) : root)
     for (const e of entries.sort((a, b) => (a.name < b.name ? -1 : 1))) {
       if (nested >= 200) return
       const p = rel ? `${rel}/${e.name}` : e.name
@@ -110,14 +140,14 @@ export async function gatherDoctorInputs(io: Io, root: string): Promise<DoctorIn
   // Rules (any depth below .claude/rules) and skills.
   const rules = async (rel: string, depth: number): Promise<void> => {
     if (depth > 6) return
-    for (const e of await io.list(join(root, rel)).catch(() => [])) {
+    for (const e of await list(join(root, rel))) {
       const p = `${rel}/${e.name}`
       if (e.kind === 'dir') await rules(p, depth + 1)
       else if (e.kind === 'file' && /\.md$/i.test(e.name)) await add(join(root, p), p, 'rule')
     }
   }
   await rules('.claude/rules', 0)
-  for (const e of await io.list(join(root, '.claude', 'skills')).catch(() => [])) {
+  for (const e of await list(join(root, '.claude', 'skills'))) {
     if (e.kind === 'dir') await add(join(root, '.claude', 'skills', e.name, 'SKILL.md'), `.claude/skills/${e.name}/SKILL.md`, 'skill')
   }
   // @imports, 4 hops, inside the project or the user's Claude folder only.
@@ -156,11 +186,11 @@ export async function gatherDoctorInputs(io: Io, root: string): Promise<DoctorIn
   }
   const settings: { path: string; text: string }[] = []
   for (const s of PROJECT_SETTINGS) {
-    const text = await readSmall(io, join(root, s))
+    const text = await readSmall(io, join(root, s), root)
     if (text !== undefined) settings.push({ path: s, text })
   }
   let scripts: Set<string> | undefined
-  const pkg = await readSmall(io, join(root, 'package.json'))
+  const pkg = await readSmall(io, join(root, 'package.json'), root)
   if (pkg !== undefined) {
     try {
       const s = (JSON.parse(pkg) as { scripts?: unknown }).scripts
@@ -170,13 +200,13 @@ export async function gatherDoctorInputs(io: Io, root: string): Promise<DoctorIn
     }
   }
   let makeTargets: Set<string> | undefined
-  const make = (await readSmall(io, join(root, 'Makefile'))) ?? (await readSmall(io, join(root, 'makefile')))
+  const make = (await readSmall(io, join(root, 'Makefile'), root)) ?? (await readSmall(io, join(root, 'makefile'), root))
   if (make !== undefined) makeTargets = new Set([...make.matchAll(/^([A-Za-z0-9_.\-/]+)\s*:(?!=)/gm)].map(m => m[1]!))
   const exists = async (rel: string) => {
     if (!rel || rel.split('/').includes('..')) return false
     return (await io.stat(join(root, rel)).catch(() => undefined)) !== undefined
   }
-  return { files, settings, scripts, makeTargets, exists }
+  return { files, settings, scripts, makeTargets, exists, partial, now: () => io.now(), deadline: deadline + DOCTOR_LIMITS.timeMs }
 }
 
 // ---- the checks ----
@@ -257,8 +287,16 @@ export async function runDoctor(inputs: DoctorInputs): Promise<Finding[]> {
   }
   const byPath = new Map(inputs.files.map(f => [f.path, f]))
   const all: { file: DoctorFile; line: Line }[] = []
+  // The checks share the inputs' deadline: past it, the doctor stops and its report says so.
+  const late = async () => {
+    if (!inputs.now || inputs.deadline === undefined || (await inputs.now()) <= inputs.deadline) return false
+    inputs.partial ??= `${(DOCTOR_LIMITS.timeMs * 2) / 1000} s spent`
+    return true
+  }
 
+  let pathChecks = 0
   for (const file of inputs.files) {
+    if (await late()) break
     const lines = linesOf(file.content)
     const isClaudeMd = file.role === 'root-claude' || file.role === 'nested-claude' || file.role === 'local-claude' || file.role === 'user-claude'
     const scoped = file.role === 'rule' && /^paths:/m.test(rawFrontmatter(file.content) ?? '')
@@ -316,6 +354,7 @@ export async function runDoctor(inputs: DoctorInputs): Promise<Finding[]> {
       for (const tok of t.match(/`[^`\s]{3,200}`|(?:^|\s)(?:\.\/)?[\w@.-]+\/[\w@./-]+\.[A-Za-z0-9]{1,6}(?=[\s,.;:)]|$)/g) ?? []) {
         const p = tok.replace(/`/g, '').trim().replace(/[.,;:)]+$/, '').replace(/^@/, '')
         if (!PATH_TOKEN.test(p) || /[*<>{}$]|^https?:|:\/\//.test(p)) continue
+        if (++pathChecks > 300) break
         const rel = p.replace(/^\.\//, '')
         const base = file.path.includes('/') && !file.path.startsWith('.claude/') && !file.path.startsWith('~/') ? file.path.slice(0, file.path.lastIndexOf('/')) : ''
         if ((await inputs.exists(rel)) || (base && (await inputs.exists(`${base}/${rel}`)))) continue
@@ -360,6 +399,7 @@ export async function runDoctor(inputs: DoctorInputs): Promise<Finding[]> {
   const long = bullets.map(b => ({ ...b, w: new Set(words(normalise(b.line.text))) })).filter(b => b.w.size >= 8).slice(0, 1500)
   let near = 0
   for (let i = 0; i < long.length && near < 10; i++) {
+    if (i % 100 === 0 && (await late())) break
     for (let j = i + 1; j < long.length && near < 10; j++) {
       const a = long[i]!
       const b = long[j]!
@@ -391,10 +431,14 @@ export async function runDoctor(inputs: DoctorInputs): Promise<Finding[]> {
     }
     for (const m of t.matchAll(/(?:^|[.;:]\s+|^\s*[-*]\s+)(use|run)\s+([\w.@/-]+(?:\s+[\w.@/-]+)?)/g)) claims.push({ pol: 'pos', subj: `${m[1]} ${m[2]}`, file: x.file.path, line: x.line, text: x.line.text })
   }
+  // Negative claims indexed by subject: one pass, not positives x claims (review F4).
+  const negatives = new Map<string, typeof claims>()
+  for (const c of claims) if (c.pol === 'neg') (negatives.get(c.subj) ?? negatives.set(c.subj, []).get(c.subj)!).push(c)
   let contra = 0
-  for (const p of claims.filter(c => c.pol === 'pos')) {
+  for (const p of claims) {
     if (contra >= 5) break
-    const n = claims.find(c => c.pol === 'neg' && c.subj === p.subj && !(c.file === p.file && c.line.n === p.line.n))
+    if (p.pol !== 'pos') continue
+    const n = negatives.get(p.subj)?.find(c => !(c.file === p.file && c.line.n === p.line.n))
     if (!n) continue
     contra++
     push({ id: 'contradiction-candidate', severity: 'info', file: p.file, line: p.line.n, quote: quote(p.text), message: `May contradict ${n.file}:${n.line.n} ("${quote(n.text)}"): one says to ${p.subj}, the other not to. A candidate, not a verdict.`, fix: 'Read both lines and keep the one that is true, or say when each applies.' }, p.line)
@@ -420,11 +464,14 @@ export async function runDoctor(inputs: DoctorInputs): Promise<Finding[]> {
 /** The short report the command prints. */
 export function doctorReport(findings: Finding[], inputs: DoctorInputs, json = false): string {
   const shown = findings.slice(0, MAX_FINDINGS)
-  if (json) return JSON.stringify({ files: inputs.files.map(f => f.path), findings: shown, more: Math.max(0, findings.length - shown.length) }, null, 2)
+  // Every text that can hold a repository's file name is cleaned here (review F6).
+  const safe = shown.map(f => ({ ...f, file: inline(f.file, 200), message: inline(f.message, 600), fix: inline(f.fix, 800) }))
+  if (json) return JSON.stringify({ files: inputs.files.map(f => inline(f.path, 200)), findings: safe, more: Math.max(0, findings.length - shown.length), partial: inputs.partial ?? null }, null, 2)
   const count = (s: Severity) => findings.filter(f => f.severity === s).length
   const lines: string[] = []
   lines.push(`FlowKy config doctor: ${inputs.files.length} instruction file(s) and ${inputs.settings.length} settings file(s) read; ${findings.length ? `${count('error')} error(s), ${count('warning')} warning(s), ${count('info')} note(s)` : 'nothing to change'}. Nothing was changed.`)
-  for (const f of shown) {
+  if (inputs.partial) lines.push(`PARTIAL: the doctor stopped early (${inputs.partial}); what follows covers what it read before that.`)
+  for (const f of safe) {
     lines.push('')
     lines.push(`${f.severity.toUpperCase()} ${f.id}  ${f.file}${f.line ? `:${f.line}` : ''}`)
     if (f.quote) lines.push(`  > ${f.quote}`)

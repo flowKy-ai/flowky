@@ -9,11 +9,12 @@
 // always regenerated from the tree: a map a repository commits is never used.
 
 import type { Io } from './io'
-import { hash, join } from './io'
+import { hash, join, readSafe } from './io'
 import { writeStateText } from './state'
 import { STATE_DIR } from './paths'
 import type { IgnoreRule } from './gitignore'
 import { ALWAYS_SKIPPED, isIgnored, parseGitignore } from './gitignore'
+import { INVISIBLE } from './guardrails/text'
 
 export const MAP_PATH = `${STATE_DIR}/project-map.md`
 /** Where the former name's 0.1.0 wrote the map; a file there is left alone and no longer read. */
@@ -43,19 +44,33 @@ const MANIFEST_NAMES = new Set([
 ])
 
 const MANIFEST_MAX_BYTES = 256 * 1024
+/** A .gitignore larger than this is not read (its rules then do not apply; the scan still ends). */
+const IGNORE_MAX_BYTES = 1024 * 1024
 
 /**
  * Walks the tree from `root`, breadth first, reading each folder's .gitignore
  * as it goes. Stops at the time budget or the file cap and says so.
  */
-export async function scanTree(io: Io, root: string, budgetMs: number, maxFiles: number): Promise<Scan> {
+/**
+ * The most a scan may take or count, whatever the project's config asks: the config is the
+ * repository's, so it may make the scan cheaper, never dearer than this (review F5).
+ */
+export const MAP_BUDGET_CEILING_MS = 3000
+export const MAP_FILES_CEILING = 50_000
+
+/**
+ * `keep`: when given, only the files it accepts are recorded AND counted toward `maxFiles` (the
+ * symbol index's own scan keeps source files only, so a huge folder of data files that sorts
+ * first cannot use up the cap: review F11). No manifest is read then.
+ */
+export async function scanTree(io: Io, root: string, budgetMs: number, maxFiles: number, opts: { keep?: (path: string) => boolean } = {}): Promise<Scan> {
   const started = await io.now()
   const deadline = started + budgetMs
   const files: ScanFile[] = []
   const dirs: string[] = []
   const manifests: Record<string, string> = {}
   let rules: IgnoreRule[] = []
-  const info = await io.readText(join(root, '.git', 'info', 'exclude'))
+  const info = await readSafe(io, join(root, '.git', 'info', 'exclude'), { maxBytes: IGNORE_MAX_BYTES, root })
   if (info) rules = rules.concat(parseGitignore(info, ''))
   const queue: string[] = ['']
   let partial = false
@@ -70,11 +85,19 @@ export async function scanTree(io: Io, root: string, budgetMs: number, maxFiles:
     const entries = await io.list(rel === '' ? root : join(root, rel)).catch(() => [])
     const gi = entries.find(e => e.name === '.gitignore' && e.kind === 'file')
     if (gi) {
-      const text = await io.readText(join(root, rel, '.gitignore'))
+      const text = await readSafe(io, join(root, rel, '.gitignore'), { maxBytes: IGNORE_MAX_BYTES, root })
       if (text) rules = rules.concat(parseGitignore(text, rel))
     }
     entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+    let seen = 0
     for (const e of entries) {
+      // A folder with tens of thousands of entries: the deadline is checked inside it too.
+      if (++seen % 512 === 0 && (await io.now()) > deadline) {
+        partial = true
+        partialReason = `time budget of ${budgetMs} ms reached`
+        queue.length = 0
+        break
+      }
       const path = rel === '' ? e.name : `${rel}/${e.name}`
       if (e.kind === 'dir') {
         if (ALWAYS_SKIPPED.has(e.name) || (rel === '' && (e.name === '.claude' || e.name === '.flowky'))) continue
@@ -83,10 +106,11 @@ export async function scanTree(io: Io, root: string, budgetMs: number, maxFiles:
         queue.push(path)
       } else if (e.kind === 'file') {
         if (isIgnored(rules, path, false)) continue
+        if (opts.keep && !opts.keep(path)) continue
         files.push({ path, size: e.size, mtimeMs: e.mtimeMs })
         const depth = path.split('/').length
-        if (depth <= 2 && MANIFEST_NAMES.has(e.name) && e.size <= MANIFEST_MAX_BYTES) {
-          const text = await io.readText(join(root, path))
+        if (!opts.keep && depth <= 2 && MANIFEST_NAMES.has(e.name) && e.size <= MANIFEST_MAX_BYTES) {
+          const text = await readSafe(io, join(root, path), { maxBytes: MANIFEST_MAX_BYTES, root })
           if (text !== undefined) manifests[path] = text
         }
         if (files.length >= maxFiles) {
@@ -179,7 +203,9 @@ function ext(path: string): string {
 
 /** Repository text made safe to print on one map line: no control characters, no backticks, short. */
 export function clean(text: string, max = 120): string {
-  const t = String(text).replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029`]/g, ' ').replace(/\s+/g, ' ').trim()
+  // The same invisible-character set as the guardrails' messages (bidirectional overrides and
+  // zero-width characters included: review F6), then one line with no backticks.
+  const t = String(text).replace(INVISIBLE, ' ').replace(/[\n\t`]/g, ' ').replace(/\s+/g, ' ').trim()
   return t.length > max ? `${t.slice(0, max - 3)}...` : t
 }
 
@@ -425,10 +451,10 @@ export type MapOutcome = {
  * always the one just rendered from the tree, never the file on disk.
  */
 export async function refreshMap(io: Io, root: string, opts: { budgetMs: number; maxFiles: number }): Promise<MapOutcome> {
-  const scan = await scanTree(io, root, opts.budgetMs, opts.maxFiles)
+  const scan = await scanTree(io, root, Math.max(50, Math.min(opts.budgetMs, MAP_BUDGET_CEILING_MS)), Math.max(1, Math.min(opts.maxFiles, MAP_FILES_CEILING)))
   const fp = fingerprint(scan)
   const path = join(root, MAP_PATH)
-  const existing = await io.readText(path)
+  const existing = await readSafe(io, path, { maxBytes: 1024 * 1024, root })
   const facts = analyze(scan)
   const text = renderMap(facts, scan, fp)
   if (existing === text) return { status: 'unchanged', text, facts, scan }
