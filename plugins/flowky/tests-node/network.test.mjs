@@ -70,9 +70,10 @@ test('the only model call is the documented one: $.model.complete in hooks/regis
 // program other than git would each be a way to reach the network without importing a module.
 // Allowed by design: the Node driver itself (cli/node-io.ts, which starts the programs), the shared
 // git runner (mods/git.ts, the only caller of io.run in the shared core), and FlowKy Pro's
-// documented exceptions (its verifier, exception 1 above, and its consented project TypeScript).
+// documented exceptions (its verifier, exception 1 above, and its consented project TypeScript,
+// loaded in its own cli/io-extension.ts, the per-plugin driver extension).
 const RUN_ALLOWED = new Set(['cli/node-io.ts', 'mods/git.ts', 'mods/verifier.ts'])
-const REQUIRE_ALLOWED = new Set(['hooks/pro-node-io.ts'])
+const REQUIRE_ALLOWED = new Set(['cli/io-extension.ts'])
 
 test('no computed require or import, no child process outside the driver, and io.run only in the git runner', () => {
   const hits = []
@@ -84,7 +85,7 @@ test('no computed require or import, no child process outside the driver, and io
     if (/\.run\s*\(/.test(text) && !RUN_ALLOWED.has(f)) hits.push(`${f}: io.run outside the git runner`)
   }
   assert.deepEqual(hits, [])
-  // The bundle carries createRequire only when an allowed file (FlowKy Pro's) put it there.
-  const allowedPresent = [...REQUIRE_ALLOWED].some(f => existsSync(join(ROOT, f)))
+  // The bundle carries createRequire only when the per-plugin driver extension (FlowKy Pro's) put it there.
+  const allowedPresent = [...REQUIRE_ALLOWED].some(f => existsSync(join(ROOT, f)) && /\bcreateRequire\b/.test(readFileSync(join(ROOT, f), 'utf8')))
   if (!allowedPresent) assert.doesNotMatch(readFileSync(join(ROOT, 'dist', 'hook.mjs'), 'utf8'), /\bcreateRequire\b/)
 })

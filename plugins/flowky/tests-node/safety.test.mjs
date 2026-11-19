@@ -240,8 +240,9 @@ test("F4: the doctor on the reviewer's input (1 MB of rules) ends fast and says 
 // ---- F9: what the shipped code can start or load ----
 
 test('F9: the shared Node driver loads no project module and removes nothing outside its root', () => {
-  // FlowKy Pro adds both in its own file (hooks/pro-node-io.ts: project TypeScript after consent; its temporary git index only).
-  if (!existsSync(join(PLUGIN, 'hooks', 'pro-node-io.ts'))) assert.doesNotMatch(readFileSync(HOOK, 'utf8'), /createRequire|loadProjectModule\s*\(/)
+  // FlowKy Pro adds both in its own per-plugin cli/io-extension.ts (project TypeScript after consent;
+  // its temporary git index only). Where that file adds nothing (FlowKy), the bundle has neither.
+  if (!/createRequire/.test(readFileSync(join(PLUGIN, 'cli', 'io-extension.ts'), 'utf8'))) assert.doesNotMatch(readFileSync(HOOK, 'utf8'), /createRequire|loadProjectModule\s*\(/)
   const driver = readFileSync(join(PLUGIN, 'cli', 'node-io.ts'), 'utf8')
   assert.doesNotMatch(driver, /async remove\(|loadProjectModule\(/)
 })

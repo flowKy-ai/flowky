@@ -9,6 +9,7 @@
 import { dispatch } from '../hooks/baseline'
 import type { HookInput } from '../hooks/session-start'
 import { nodeIo } from './node-io'
+import { extendIo } from './io-extension'
 
 async function readStdin(): Promise<string> {
   if (process.stdin.isTTY) return ''
@@ -40,7 +41,7 @@ async function main(): Promise<void> {
   const wait = (ms: number) => new Promise<void>(r => setTimeout(r, ms))
   const args = process.argv.slice(3)
   // A person at a terminal: both ends are a TTY. The assistant's shell tool gives neither.
-  let io = { ...nodeIo(), interactive: Boolean(process.stdin.isTTY && process.stdout.isTTY) }
+  let io = extendIo({ ...nodeIo(), interactive: Boolean(process.stdin.isTTY && process.stdout.isTTY) })
   // --read-only (the bench): the hook runs as usual but writes nothing in the project it replays.
   if (args.includes('--read-only')) {
     const refuse = async () => {

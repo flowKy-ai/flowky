@@ -58,6 +58,7 @@
   "interface": {
     "hooks/baseline.ts": "the plugin's dispatcher: export dispatch(io, event, input, runtime, wait?, args?)",
     "hooks/identity.ts": "the plugin's name, version, mods command and handoff skill",
-    "mods/config.ts": "the plugin's config: loadConfig(io, root) with at least the map and context sections"
+    "mods/config.ts": "the plugin's config: loadConfig(io, root) with at least the map and context sections",
+    "cli/io-extension.ts": "the plugin's additions to the Node driver: export extendIo(io): Io (the free plugin adds nothing)"
   }
 }

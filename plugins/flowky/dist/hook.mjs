@@ -3364,6 +3364,11 @@ function nodeIo() {
   };
 }
 
+// cli/io-extension.ts
+function extendIo(io) {
+  return io;
+}
+
 // cli/hook.ts
 async function readStdin() {
   if (process.stdin.isTTY) return "";
@@ -3393,7 +3398,7 @@ async function main() {
   if (!input.cwd) input.cwd = process.cwd();
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   const args = process.argv.slice(3);
-  let io = { ...nodeIo(), interactive: Boolean(process.stdin.isTTY && process.stdout.isTTY) };
+  let io = extendIo({ ...nodeIo(), interactive: Boolean(process.stdin.isTTY && process.stdout.isTTY) });
   if (args.includes("--read-only")) {
     const refuse = async () => {
       throw new Error("read-only run");
