@@ -26,14 +26,16 @@ Built for Claude Code. The project map and the generated configuration also work
 | **Writes the configuration** | One command writes `CLAUDE.md`, path-scoped rules and the project-map skill from your real codebase. |
 | **Your keys, your machine** | OpenAI, Anthropic, Google or any OpenAI-compatible endpoint. Keys stay in your editor, and model calls go straight to your provider, not through us. |
 
-**Coming (not in the published extension yet)**
+**In FlowKy for Claude Code (the plugin), today**
 
 | | |
 |---|---|
-| **Stops duplicate code** | Every function and class in your project is indexed. When your agent starts writing one that exists, it gets the file and the line — before the write lands. |
-| **Breaks the retry loop** | Third time the same command has failed, FlowKy interrupts and surfaces the error the agent kept skipping past. |
-| **Keeps the map honest** | The project map records the commit it was built from and reports how far it has drifted, so a stale map is never mistaken for a current one. |
-| **Audits your config** | Finds duplicated rules, dead weight, and instructions that silently stop applying after a compaction. |
+| **Stops duplicate code** | Your project's top-level exported functions and classes (TypeScript, JavaScript, Python, Go, Rust) are indexed on your machine. Before Claude writes one whose name is already exported elsewhere, FlowKy pauses that write once and shows where the existing one is. It applies to Claude's Write and Edit, once per file and name per session. |
+| **Breaks the retry loop** | The same command fails three times with the same error? Claude is told so, with the error line, and the next identical run is paused once. A command piped into a filter without `pipefail` is not seen. |
+| **Keeps the map honest** | The map and the index are rebuilt at every session start. One line tells you and Claude when a committed map is behind HEAD, or when HEAD moves during the session. |
+| **Audits your config** | 19 local checks on `CLAUDE.md`, rules and settings. The doctor diagnoses; it changes nothing. |
+
+These four are in the plugin ([`plugins/flowky`](plugins/flowky/README.md), version 0.4.0, an early version). They are **not in the published VS Code extension yet**.
 
 ## Install
 
@@ -42,7 +44,16 @@ Built for Claude Code. The project map and the generated configuration also work
 code --install-extension FlowKy.flowky
 ```
 
-Then open the Command Palette and run **Generate Claude Configuration**. A command-line installer is not published yet; until it is, the extension is the only supported way to install FlowKy.
+Then open the Command Palette and run **Generate Claude Configuration**. A command-line installer is not published yet.
+
+The plugin for Claude Code installs at the Claude Code prompt:
+
+```text
+/plugin marketplace add flowKy-ai/flowky
+/plugin install flowky@flowky
+```
+
+It makes no network request and no model call; what it does and its limits are in [its own README](plugins/flowky/README.md).
 
 The command writes:
 
@@ -68,9 +79,9 @@ Cursor, Copilot and Codex) → give it a map → audit → hand a finding to the
 agent → sync to your project page. The written version lives at
 [flowky.ai/docs/the-perfect-flow](https://flowky.ai/en/docs/the-perfect-flow).
 
-## How the guard will work
+## How the guard works
 
-*Status: not in the published extension yet (see "Coming" above).*
+*Status: in the plugin for Claude Code today; not in the published VS Code extension yet. The transcript below is an illustration: the exact words are in the plugin's README.*
 
 The guard is a hook, not a prompt. That distinction is the whole product: instructions in a context file are advisory and drift as the window fills, while a hook is checked on every single write regardless of what the model decided.
 
