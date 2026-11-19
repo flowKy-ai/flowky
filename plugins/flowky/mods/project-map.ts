@@ -82,7 +82,12 @@ export async function scanTree(io: Io, root: string, budgetMs: number, maxFiles:
       break
     }
     const rel = queue.shift()!
-    const entries = await io.list(rel === '' ? root : join(root, rel)).catch(() => [])
+    // Only the files this scan keeps are statted, and none after the deadline (test stability: a huge folder).
+    const entries = await io.list(rel === '' ? root : join(root, rel), { until: deadline, stat: opts.keep ? name => opts.keep!(rel === '' ? name : `${rel}/${name}`) : undefined }).catch(() => [])
+    if (entries.some(e => e.kind === 'file' && e.mtimeMs === -1 && (!opts.keep || opts.keep(rel === '' ? e.name : `${rel}/${e.name}`)))) {
+      partial = true
+      partialReason = `time budget of ${budgetMs} ms reached`
+    }
     const gi = entries.find(e => e.name === '.gitignore' && e.kind === 'file')
     if (gi) {
       const text = await readSafe(io, join(root, rel, '.gitignore'), { maxBytes: IGNORE_MAX_BYTES, root })

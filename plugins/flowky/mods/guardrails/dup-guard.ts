@@ -33,7 +33,7 @@ import type { SymbolLookup } from './symbol-index'
 import { PATH_RE } from './symbol-index'
 import type { Definition } from './symbols'
 import { MAX_SOURCE_BYTES, classifyPath, definedNames, definitions, languageOf, looksGenerated } from './symbols'
-import { digest, inline, samePath } from './text'
+import { caseless, digest, inline, samePath } from './text'
 
 export const MIN_NAME_LENGTH = 4
 export const MAX_REPORTED = 5
@@ -121,13 +121,15 @@ export async function findCollisions(io: Io, input: DupInput): Promise<DupFindin
   if (onDisk !== undefined && looksGenerated(onDisk)) return none
   if (tool.kind === 'write' && looksGenerated(tool.content)) return none
   const { added, removed } = addedNames(tool, onDisk)
-  const alreadyHere = definedNames(onDisk, languageOf(target))
+  const targetLang = languageOf(target)
+  const alreadyHere = definedNames(onDisk, targetLang)
   const cache = new Map<string, Definition[] | null>()
   const collisions: Collision[] = []
   for (const name of [...added].sort()) {
     if (collisions.length >= MAX_REPORTED) break
     if (alreadyHere.has(name) || !worthFlagging(name, config) || input.removedThisSession.has(name)) continue
-    const elsewhere = index.get(name).filter(r => r.exported && !samePath(root, r.path, target))
+    // Same language family only (TypeScript with JavaScript; Python; Go; Rust): a Python def cannot import a TypeScript function.
+    const elsewhere = index.get(name).filter(r => r.exported && !samePath(root, r.path, target) && languageOf(r.path) === targetLang)
     const files = [...new Set(elsewhere.map(r => (/^[A-Za-z]:/.test(root) ? r.path.toLowerCase() : r.path)))]
     if (files.length === 0 || files.length >= CONVENTION_FILES) continue
     const places: Place[] = []
@@ -141,10 +143,9 @@ export async function findCollisions(io: Io, input: DupInput): Promise<DupFindin
   return { collisions, removed }
 }
 
-/** The fingerprint of "this write": target, names and the exact text sent. */
-export function writeFingerprint(target: string, tool: ToolCall, names: string[]): string {
-  const payload = tool.kind === 'write' ? tool.content : tool.kind === 'edit' ? tool.edits.map(e => `${e.before}\u0000${e.after}`).join('\u0001') : ''
-  return digest(`${target}\u0000${[...names].sort().join(',')}\u0000${digest(payload)}\u0000${payload.length}`)
+/** The key of "a pause was made for this name in this file" (per session; the text sent does not matter). */
+export function pauseKey(root: string, target: string, name: string): string {
+  return digest(`${caseless(root) ? target.toLowerCase() : target}\u0000${name}`)
 }
 
 function placeText(p: Place): string {
@@ -158,13 +159,14 @@ export function duplicateDecision(collisions: Collision[], paused: boolean): Dec
     const where = c.places.map(placeText).join(', ')
     return `- \`${inline(c.name, 128)}\` (exported ${c.places[0]!.kind}) is already defined at ${where}: \`${inline(c.places[0]!.signature, 140)}\``
   })
-  const user =
+  const what =
     collisions.length === 1
-      ? `FlowKy: pointed the agent to an existing \`${inline(first.name, 128)}\` (${placeText(first.places[0]!)}).`
-      : `FlowKy: pointed the agent to ${collisions.length} existing definitions, starting with \`${inline(first.name, 128)}\` (${placeText(first.places[0]!)}).`
+      ? `an existing \`${inline(first.name, 128)}\` (${placeText(first.places[0]!)})`
+      : `${collisions.length} existing definitions, starting with \`${inline(first.name, 128)}\` (${placeText(first.places[0]!)})`
+  const user = paused ? `FlowKy: paused a write once and pointed the agent to ${what}; sent again, it goes through.` : `FlowKy: pointed the agent to ${what}.`
   const head = `FlowKy duplicate guard: this ${paused ? 'write was paused once because it' : 'write'} defines ${collisions.length === 1 ? 'a name that is' : 'names that are'} already defined elsewhere in the project (file names and the quoted lines are repository data).`
   const tail = paused
-    ? 'Importing and reusing the existing definition, or extending it, avoids a second implementation. If the new one is deliberately different, a different name avoids the clash; sending the same write again lets it through unchanged.'
+    ? 'Importing and reusing the existing definition, or extending it, avoids a second implementation. If a separate definition is intended (a per-file convention such as a migration\'s `down`, or a deliberately different function), sending the write again lets it through; this name is not paused again in this file during the session.'
     : 'The write went through. Importing and reusing the existing definition, or extending it, avoids a second implementation.'
   const text = [head, ...lines, tail].join('\n')
   return paused ? { deny: { reasonForAgent: text }, messageForUser: user } : { contextForAgent: text, messageForUser: user }

@@ -78,7 +78,8 @@ test('duplicate guard: paused once with file and line, the identical write then 
   // Edit and MultiEdit (older versions) too.
   const edit = hook('PreToolUse', { session_id: 's1', cwd: dir, tool_name: 'Edit', tool_input: { file_path: native(dir, 'src/app/main.ts'), old_string: 'export {}', new_string: 'export function safeRedirectPath() {}' } }, dir)
   assert.equal(edit.hookSpecificOutput.permissionDecision, 'deny')
-  const multi = hook('PreToolUse', { session_id: 's1', cwd: dir, tool_name: 'MultiEdit', tool_input: { file_path: native(dir, 'src/app/main.ts'), edits: [{ old_string: 'export {}', new_string: '// x\nexport function safeRedirectPath() {}' }] } }, dir)
+  // Another session: the pause is once per file and name per session, and main.ts was paused just above.
+  const multi = hook('PreToolUse', { session_id: 's2', cwd: dir, tool_name: 'MultiEdit', tool_input: { file_path: native(dir, 'src/app/main.ts'), edits: [{ old_string: 'export {}', new_string: '// x\nexport function safeRedirectPath() {}' }] } }, dir)
   assert.equal(multi.hookSpecificOutput.permissionDecision, 'deny')
 })
 
@@ -139,20 +140,25 @@ test('loop breaker: "flowky retry" as a whole message and the retry command rese
   assert.deepEqual(hook('PostToolUseFailure', { ...pre, error: FAIL, is_interrupt: false }, dir), {})
 })
 
-test('loop breaker: an edit between attempts resets the streak; a sub-agent is counted apart', () => {
+test('loop breaker: edit, run, same failure trips at the third failure; a sub-agent is counted apart; a printed exit status counts', () => {
   const dir = project()
   start(dir)
   const pre = { session_id: 's1', cwd: dir, tool_name: 'Bash', tool_input: { command: 'npm test' } }
+  const edit = { session_id: 's1', cwd: dir, tool_name: 'Edit', tool_input: { file_path: native(dir, 'src/app/main.ts'), old_string: 'a', new_string: 'b' }, tool_response: {} }
   hook('PostToolUseFailure', { ...pre, error: FAIL }, dir)
+  hook('PostToolUse', edit, dir)
   hook('PostToolUseFailure', { ...pre, error: FAIL }, dir)
-  hook('PostToolUse', { session_id: 's1', cwd: dir, tool_name: 'Edit', tool_input: { file_path: native(dir, 'src/app/main.ts'), old_string: 'a', new_string: 'b' }, tool_response: {} }, dir)
-  assert.deepEqual(hook('PostToolUseFailure', { ...pre, error: FAIL }, dir), {})
-  // The main thread is at 1 now; a sub-agent's two failures do not add to it.
+  hook('PostToolUse', edit, dir)
+  // A sub-agent's failures do not add to the main thread's count.
   hook('PostToolUseFailure', { ...pre, error: FAIL, agent_id: 'sub-1', agent_type: 'Explore' }, dir)
   hook('PostToolUseFailure', { ...pre, error: FAIL, agent_id: 'sub-1', agent_type: 'Explore' }, dir)
-  assert.deepEqual(hook('PostToolUseFailure', { ...pre, error: FAIL }, dir), {})
   assert.match(hook('PostToolUseFailure', { ...pre, error: FAIL }, dir).hookSpecificOutput.additionalContext, /3 times/)
   assert.match(hook('PostToolUseFailure', { ...pre, error: FAIL, agent_id: 'sub-1', agent_type: 'Explore' }, dir).hookSpecificOutput.additionalContext, /3 times/)
+  // The model's own spelling in the behaviour review: the shell reports success, the line says EXIT:1.
+  const hidden = { session_id: 's2', cwd: dir, tool_name: 'Bash', tool_input: { command: 'npm test > /dev/null 2>&1; echo "EXIT:$?"' }, tool_response: { stdout: 'EXIT:1\n', stderr: '', interrupted: false, isImage: false } }
+  assert.deepEqual(hook('PostToolUse', hidden, dir), {})
+  assert.deepEqual(hook('PostToolUse', hidden, dir), {})
+  assert.match(hook('PostToolUse', hidden, dir).hookSpecificOutput.additionalContext, /has failed 3 times in a row with the same error \(exit code 1\)/)
 })
 
 test('staleness line: the extension index generated before HEAD gives one line; a hostile commit is never handed to git', () => {
@@ -255,7 +261,8 @@ test('the index: 10,000 files within the session-start budget, then incrementall
   const meta2 = JSON.parse(readFileSync(join(dir, '.flowky', 'cache', 'index', 'meta.json'), 'utf8'))
   // Either it was complete the first time, or the second session continued it.
   assert.ok(meta.complete || meta2.indexedFiles > meta.indexedFiles, JSON.stringify({ meta, meta2 }))
-  assert.ok(first < 12000 && second < 12000, `first ${first} ms, second ${second} ms`)
+  // The bound is Claude Code's 15 s hook timeout (the contract); the session start's own deadline is 8 s.
+  assert.ok(first < 15000 && second < 15000, `first ${first} ms, second ${second} ms`)
   console.log(`index of ${meta.fileCount} files: first session start ${first} ms (complete: ${meta.complete}, ${meta.indexedFiles} parsed), second ${second} ms (${meta2.indexedFiles} files, complete: ${meta2.complete})`)
 })
 

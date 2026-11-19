@@ -52,6 +52,7 @@
     "tests-node/guardrails.test.mjs",
     "tests-node/network.test.mjs",
     "tests-node/safety.test.mjs",
+    "tests-node/skills.test.mjs",
     "tests-node/suites.test.mjs",
     "tests-node/tmp.mjs"
   ],

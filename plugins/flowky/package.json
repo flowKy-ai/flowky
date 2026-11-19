@@ -11,8 +11,8 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "typecheck": "node scripts/typecheck.mjs",
-    "test": "node scripts/build.mjs --check && node --test tests-node/ && node scripts/host.mjs plugin test .",
-    "test:node": "node scripts/build.mjs --check && node --test tests-node/",
+    "test": "node scripts/build.mjs --check && node --test --test-concurrency=2 tests-node/ && node scripts/host.mjs plugin test .",
+    "test:node": "node scripts/build.mjs --check && node --test --test-concurrency=2 tests-node/",
     "validate": "node scripts/host.mjs plugin validate ."
   },
   "devDependencies": {

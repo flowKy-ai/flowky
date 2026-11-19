@@ -27,9 +27,12 @@ export async function onStopContext(io: Io, input: HookInput, command: string): 
     s.lastTokens = state.lastTokens
   })
   const now = await io.now()
+  let modsHere = false
   await updateState<LiteStatus>(io, root, 'status', {}, status => {
     status.context = { at: now, tokens, source: 'transcript usage (Stop hook)', hinted: show || session.warnedAt !== undefined }
     status.lastHook = { at: now, event: 'Stop' }
+    modsHere = typeof input.session_id === 'string' && status.mods?.sessionId === input.session_id
   })
-  return show ? { systemMessage: `FlowKy: ${hintText(tokens, config.context.thresholdTokens, command)}` } : undefined
+  // With the mods layer active in this session, its toast already gives the hint: one message, not two.
+  return show && !modsHere ? { systemMessage: `FlowKy: ${hintText(tokens, config.context.thresholdTokens, command)}` } : undefined
 }

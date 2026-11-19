@@ -44,7 +44,12 @@ export async function dispatch(io: Io, event: string, input: HookInput, runtime:
       return { text: await retryCommand(io, projectRoot(io, input), id && /^[A-Za-z0-9_-]{1,80}$/.test(id) ? id : undefined), exitCode: 0 }
     }
     case 'health':
-      return { text: await healthReport(io, projectRoot(io, input), { layer: 'baseline', runtime, sessionId: input.session_id }), exitCode: 0 }
+    {
+      // The health skill passes `--session ${CLAUDE_SESSION_ID}`, so the report can say whether the mods layer runs in this session.
+      const i = args.indexOf('--session')
+      const id = i >= 0 && /^[A-Za-z0-9_-]{1,80}$/.test(args[i + 1] ?? '') ? args[i + 1] : typeof input.session_id === 'string' ? input.session_id : undefined
+      return { text: await healthReport(io, projectRoot(io, input), { layer: 'baseline', runtime, sessionId: id }), exitCode: 0 }
+    }
     case 'map': {
       const root = projectRoot(io, input)
       const { config } = await loadConfig(io, root)

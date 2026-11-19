@@ -44,6 +44,8 @@ export type AgentEvent =
       ok: boolean
       /** The error text the agent received (output of a failed command), without the agent's own framing. */
       error?: string
+      /** The output of a command that the shell reported as a success (read only to find a printed exit status). */
+      output?: string
       exitCode?: number
       /** The failure was an abort or a cancellation, not an error the tool reported. */
       interrupted?: boolean

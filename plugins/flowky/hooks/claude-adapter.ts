@@ -89,7 +89,9 @@ export function claudeEvent(io: Io, eventName: string, input: HookInput): AgentE
       const exit = typeof r.exit_code === 'number' ? r.exit_code : typeof r.exitCode === 'number' ? r.exitCode : undefined
       const failed = r.success === false || (exit !== undefined && exit !== 0)
       if (failed) return { kind: 'afterTool', tool: tool(), ok: false, exitCode: exit, error: str(r.error) || str(r.stderr), ...where }
-      return { kind: 'afterTool', tool: tool(), ok: true, ...where }
+      // PostToolUse for Bash: tool_response {stdout, stderr} (the reference's Bash output shape).
+      const output = [str(r.stdout), str(r.stderr)].filter(Boolean).join('\n').slice(0, 200_000)
+      return { kind: 'afterTool', tool: tool(), ok: true, output: output || undefined, ...where }
     }
     case 'PostToolUseFailure': {
       const { exitCode, output } = splitExitCode(str(input.error))

@@ -11,6 +11,8 @@ export type Entry = { name: string; kind: EntryKind; size: number; mtimeMs: numb
 
 export type Stat = { kind: EntryKind; size: number; mtimeMs: number }
 
+export type ListOptions = { stat?: (name: string) => boolean; until?: number }
+
 export type RunResult = {
   exitCode: number
   stdout: string
@@ -53,7 +55,12 @@ export interface Io {
    * real path when given. Undefined when refused, missing or unreadable.
    */
   readFile?(path: string, opts: ReadOptions): Promise<string | undefined>
-  list(dir: string): Promise<Entry[]>
+  /**
+   * The entries of a folder. `stat` says which file names need their size and time (the others
+   * come back with size 0 and mtimeMs -1, so a folder of 30,000 data files costs one readdir);
+   * `until` is a time (io.now) after which no more file is statted (those come back the same way).
+   */
+  list(dir: string, opts?: ListOptions): Promise<Entry[]>
   stat(path: string): Promise<Stat | undefined>
   /**
    * Removes a file the plugin itself made outside the state folder (FlowKy Pro's temporary git

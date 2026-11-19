@@ -46,7 +46,7 @@ export function fakeEvent(i: FakeInput): AgentEvent | undefined {
     case 'ToolWillRun':
       return { kind: 'beforeTool', tool: toolOf(i.action), ...where }
     case 'ToolDidRun':
-      return { kind: 'afterTool', tool: toolOf(i.action), ok: !i.result?.failed, error: i.result?.text, exitCode: i.result?.code, interrupted: i.result?.aborted, ...where }
+      return { kind: 'afterTool', tool: toolOf(i.action), ok: !i.result?.failed, error: i.result?.failed ? i.result?.text : undefined, output: i.result?.failed ? undefined : i.result?.text, exitCode: i.result?.code, interrupted: i.result?.aborted, ...where }
     case 'UserSaid':
       return { kind: 'promptSubmit', text: i.words ?? '', ...where }
   }

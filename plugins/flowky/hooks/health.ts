@@ -44,17 +44,25 @@ export async function healthReport(io: Io, root: string, facts: HealthFacts): Pr
     `Config ${CONFIG_PATH}: ${error ? `BROKEN, defaults in force (${error})` : found ? 'found and valid' : 'not present, defaults in force'}`,
   )
   const ignoredOk = (await readSafe(io, join(stateDir(io, root), '.gitignore'), { maxBytes: 4096, root })) === STATE_GITIGNORE
-  lines.push(`State folder: ${stateDir(io, root)} (map and small JSON files; ${ignoredOk ? 'its own .gitignore ("*") keeps it out of commits' : 'its .gitignore ("*") is written at the next hook'}; safe to delete). Nothing else in .flowky/ is written by the plugin.`)
+  lines.push(`State folder: ${stateDir(io, root)} (map, symbol index, handoff and small state files; ${ignoredOk ? 'its own .gitignore ("*") keeps it out of commits' : 'its .gitignore ("*") is written at the next hook'}; safe to delete). Nothing else in .flowky/ is written by the plugin.`)
   const both = await bothEnabledLine(io, root).catch(() => undefined)
   if (both) lines.push(both)
 
   const mods = status.mods
   const modsActive = mods !== undefined && (facts.layer === 'mods' || (facts.sessionId !== undefined && mods.sessionId === facts.sessionId))
+  // Without a session id (the command was run by hand), it cannot tell which session loaded the mods layer.
+  const modsLine = modsActive
+    ? `active in this session (loaded ${ago(now, mods!.at)})`
+    : mods && facts.sessionId === undefined
+      ? `loaded ${ago(now, mods.at)} (this command was given no session id, so it cannot tell in which session)`
+      : mods
+        ? `loaded in another session ${ago(now, mods.at)}, not in this one`
+        : 'not detected (needs a Claude Code with the mods API and mods allowed; everything else works without it)'
   lines.push('')
   lines.push('Layers:')
-  lines.push(`  baseline (command hooks, skills): ${status.lastHook ? `active, last hook ${status.lastHook.event} ${ago(now, status.lastHook.at)}` : 'no hook has run in this project yet (is Node on PATH? see README, "Requirements")'}`)
+  lines.push(`  baseline (command hooks, skills): ${status.lastHook ? `active, last hook ${status.lastHook.event} ${ago(now, status.lastHook.at)}` : 'no hook has run in this project yet (is Node on PATH? see README, "Install")'}`)
   lines.push(
-    `  mods layer (status line, no-turn command): ${modsActive ? `active in this session (loaded ${ago(now, mods!.at)})` : mods ? `seen in another session ${ago(now, mods.at)}, not detected in this one` : 'not detected (needs a Claude Code with the mods API and mods allowed; everything else works without it)'}`,
+    `  mods layer (status line, no-turn command): ${modsLine}`,
   )
 
   lines.push('')

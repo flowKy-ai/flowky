@@ -28,7 +28,7 @@ import { join, readSafe } from '../io'
 import type { Scan } from '../project-map'
 import { STATE_DIR, writeStateText } from '../state'
 import type { Definition, Kind, Lang } from './symbols'
-import { LANGUAGE_NAMES, MAX_SOURCE_BYTES, classifyPath, definitions, languageOf, looksGenerated } from './symbols'
+import { LANGUAGE_NAMES, MAX_SOURCE_BYTES, classifyPath, definitions, generatedReason, languageOf } from './symbols'
 import { digest } from './text'
 
 export const INDEX_DIR = `${STATE_DIR}/index`
@@ -57,8 +57,10 @@ export type IndexMeta = {
   complete: boolean
   elapsedMs: number
   languages: string[]
+  /** Source files read but left out: with a generated marker, minified, or over 1 MB (behaviour review, finding 5). */
+  skipped: { generated: number; minified: number; tooLarge: number }
 }
-type FileEntry = { size: number; mtime: number; hash: string }
+type FileEntry = { size: number; mtime: number; hash: string; skipped?: 'generated' | 'minified' }
 
 // ---- reading (hostile input) ----
 
@@ -89,11 +91,11 @@ function parseFiles(text: string | undefined): Map<string, FileEntry> {
   for (const line of text.split('\n')) {
     if (out.size >= INDEX_MAX_FILES * 2) break
     if (!line || line[0] === '#' || line.length > 1024) continue
-    const [path, size, mtime, hash] = line.replace(/\r$/, '').split('\t')
+    const [path, size, mtime, hash, skipped] = line.replace(/\r$/, '').split('\t')
     const s = Number(size)
     const m = Number(mtime)
     if (!path || !PATH_RE.test(path) || !Number.isFinite(s) || !Number.isFinite(m) || !/^[0-9a-f]{16}$/.test(hash ?? '')) continue
-    out.set(path, { size: s, mtime: m, hash: hash! })
+    out.set(path, { size: s, mtime: m, hash: hash!, ...(skipped === 'generated' || skipped === 'minified' ? { skipped } : {}) })
   }
   return out
 }
@@ -119,6 +121,11 @@ export function parseMeta(value: unknown): IndexMeta | undefined {
     complete: v.complete === true,
     elapsedMs: int(v.elapsedMs),
     languages: Array.isArray(v.languages) ? v.languages.filter((l): l is string => typeof l === 'string' && /^[\w/ +#-]{1,40}$/.test(l)).slice(0, 10) : [],
+    skipped: {
+      generated: int((v.skipped as Record<string, unknown> | undefined)?.generated),
+      minified: int((v.skipped as Record<string, unknown> | undefined)?.minified),
+      tooLarge: int((v.skipped as Record<string, unknown> | undefined)?.tooLarge),
+    },
   }
 }
 
@@ -186,13 +193,14 @@ function rowsOf(path: string, defs: Definition[], hash: string): IndexRow[] {
 }
 
 /** Reads and parses one source file; undefined when it is not a source file to index. */
-export async function parseSourceFile(io: Io, root: string, rel: string): Promise<{ rows: IndexRow[]; hash: string } | undefined> {
+export async function parseSourceFile(io: Io, root: string, rel: string): Promise<{ rows: IndexRow[]; hash: string; skipped?: 'generated' | 'minified' } | undefined> {
   if (!PATH_RE.test(rel) || classifyPath(rel) !== 'source') return undefined
   const lang = languageOf(rel)
   const text = await readCapped(io, root, join(root, rel), MAX_SOURCE_BYTES)
   if (text === undefined) return undefined
   const hash = digest(text)
-  if (looksGenerated(text)) return { rows: [], hash }
+  const why = generatedReason(text)
+  if (why) return { rows: [], hash, skipped: why }
   return { rows: rowsOf(rel, definitions(text, lang), hash), hash }
 }
 
@@ -206,9 +214,10 @@ export async function buildIndex(io: Io, root: string, scan: Scan, opts: { commi
   const started = await io.now()
   const deadline = started + (opts.budgetMs ?? INDEX_BUDGET_MS)
   const maxFiles = opts.maxFiles ?? INDEX_MAX_FILES
-  const candidates = scan.files
-    .filter(f => PATH_RE.test(f.path) && f.size <= MAX_SOURCE_BYTES && classifyPath(f.path) === 'source')
-    .slice(0, maxFiles)
+  const sources = scan.files.filter(f => PATH_RE.test(f.path) && classifyPath(f.path) === 'source')
+  const tooLarge = sources.filter(f => f.size > MAX_SOURCE_BYTES).length
+  const candidates = sources.filter(f => f.size <= MAX_SOURCE_BYTES).slice(0, maxFiles)
+  const skippedAs = { generated: 0, minified: 0 }
   const prevFiles = parseFiles(await readCapped(io, root, join(root, STATE_DIR, INDEX_FILES.files), MAX_INDEX_BYTES))
   const prevRows = new Map<string, IndexRow[]>()
   for (const r of parseRows(await readCapped(io, root, join(root, STATE_DIR, INDEX_FILES.symbols), MAX_INDEX_BYTES))) {
@@ -239,13 +248,14 @@ export async function buildIndex(io: Io, root: string, scan: Scan, opts: { commi
           return { f, kind: 'skipped' as const }
         }
         const one = await parseSourceFile(io, root, f.path)
-        return one ? { f, kind: 'parsed' as const, entry: { size: f.size, mtime, hash: one.hash }, rows: one.rows } : { f, kind: 'none' as const }
+        return one ? { f, kind: 'parsed' as const, entry: { size: f.size, mtime, hash: one.hash, skipped: one.skipped }, rows: one.rows } : { f, kind: 'none' as const }
       }),
     )
     for (const r of results) {
       const lang = languageOf(r.f.path)
       if (lang) langs.add(lang)
       if (r.kind === 'reused') {
+        if (r.entry.skipped) skippedAs[r.entry.skipped]++
         files.set(r.f.path, r.entry)
         for (const row of prevRows.get(r.f.path) ?? []) rows.push(row)
         reused++
@@ -255,7 +265,8 @@ export async function buildIndex(io: Io, root: string, scan: Scan, opts: { commi
         for (const row of prevRows.get(r.f.path) ?? []) rows.push(row)
       } else if (r.kind === 'parsed') {
         parsed++
-        files.set(r.f.path, r.entry)
+        if (r.entry.skipped) skippedAs[r.entry.skipped]++
+        files.set(r.f.path, { size: r.entry.size, mtime: r.entry.mtime, hash: r.entry.hash, ...(r.entry.skipped ? { skipped: r.entry.skipped } : {}) })
         for (const row of r.rows) rows.push(row)
       }
     }
@@ -271,9 +282,10 @@ export async function buildIndex(io: Io, root: string, scan: Scan, opts: { commi
     complete,
     elapsedMs: (await io.now()) - started,
     languages: [...langs].map(l => LANGUAGE_NAMES[l]).sort(),
+    skipped: { ...skippedAs, tooLarge },
   }
   const symbolsText = `# FlowKy plugin symbol index (generated; never edit; safe to delete): name\tkind\tpath\tline\texported\thash\n${rows.map(tsvRow).join('\n')}${rows.length ? '\n' : ''}`
-  const filesText = `# FlowKy plugin index files: path\tsize\tmtime\thash\n${[...files].map(([p, e]) => `${p}\t${e.size}\t${e.mtime}\t${e.hash}`).join('\n')}${files.size ? '\n' : ''}`
+  const filesText = `# FlowKy plugin index files: path\tsize\tmtime\thash\tskipped\n${[...files].map(([p, e]) => `${p}\t${e.size}\t${e.mtime}\t${e.hash}${e.skipped ? `\t${e.skipped}` : ''}`).join('\n')}${files.size ? '\n' : ''}`
   let written = false
   const current = await readCapped(io, root, join(root, STATE_DIR, INDEX_FILES.symbols), MAX_INDEX_BYTES)
   if (current !== symbolsText) {

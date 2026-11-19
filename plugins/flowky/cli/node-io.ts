@@ -172,8 +172,9 @@ export function nodeIo(): Io {
     async readRange(path, offset, bytes) {
       return strictRead(path, { maxBytes: Math.max(0, bytes), offset, partial: true }, realCache)
     },
-    async list(dir) {
+    async list(dir, lo) {
       const entries = await fs.readdir(dir, { withFileTypes: true })
+      const unstatted = (name: string): Entry => ({ name, kind: 'file', size: 0, mtimeMs: -1 })
       // The files' sizes and times are read 32 at a time (one after the other is slow on Windows).
       const out: Entry[] = []
       for (let i = 0; i < entries.length; i += 32) {
@@ -181,6 +182,7 @@ export function nodeIo(): Io {
           entries.slice(i, i + 32).map(async (e): Promise<Entry> => {
             if (e.isSymbolicLink()) return { name: e.name, kind: 'other', size: 0, mtimeMs: 0 }
             if (e.isFile()) {
+              if ((lo?.stat && !lo.stat(e.name)) || (lo?.until !== undefined && Date.now() > lo.until)) return unstatted(e.name)
               const st = await fs.stat(`${dir}/${e.name}`).catch(() => undefined)
               return { name: e.name, kind: 'file', size: st?.size ?? 0, mtimeMs: st?.mtimeMs ?? 0 }
             }

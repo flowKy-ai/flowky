@@ -22,8 +22,8 @@ import type { AgentEvent, Decision, ToolCall } from '../mods/guardrails/events'
 import { NOTHING, combine } from '../mods/guardrails/events'
 import type { GuardrailsConfig } from '../mods/guardrails/settings'
 import { findOldGuard, loadGuardrails, oldGuardAdvice } from '../mods/guardrails/settings'
-import { duplicateDecision, findCollisions, writeFingerprint } from '../mods/guardrails/dup-guard'
-import { beforeShell, recordChange, recordFailure, recordSuccess, resetStreaks, isReadOnlyCommand } from '../mods/guardrails/loop-breaker'
+import { duplicateDecision, findCollisions, pauseKey } from '../mods/guardrails/dup-guard'
+import { beforeShell, commandFingerprint, printedExitStatus, recordFailure, recordSuccess, resetStreaks } from '../mods/guardrails/loop-breaker'
 import { INDEX_BUDGET_MS, INDEX_MAX_FILES, buildIndex, loadIndex, readMeta, updateIndexedFile } from '../mods/guardrails/symbol-index'
 import { pruneGuardSessions, readSession, withSession } from '../mods/guardrails/session-state'
 import { driftSince, extensionCommit, headCommit, headFromFiles, movedLine, startLine } from '../mods/guardrails/staleness'
@@ -138,19 +138,20 @@ async function beforeWrite(io: Io, ev: Extract<AgentEvent, { kind: 'beforeTool' 
   })
   if (!collisions.length && !removed.size) return NOTHING
   const pause = cfg.duplicateGuard.mode === 'pause-once' && collisions.length > 0
-  const fp = collisions.length ? writeFingerprint(target, tool, collisions.map(c => c.name)) : ''
-  const { result: alreadyPaused, saved } = await withSession(io, root, ev.session, (s, now) => {
+  // Once per file and name per session (the lead's rule after the behaviour review): after one pause
+  // for X in F, every later write that defines X in F passes, whatever its text.
+  const { result: fresh, saved } = await withSession(io, root, ev.session, (s, now) => {
     for (const n of removed) s.removed[n] = now
-    if (!pause) return false
-    if (s.writes[fp] !== undefined) return true
-    s.writes[fp] = now
-    return false
+    if (!pause) return collisions
+    const notYet = collisions.filter(c => s.writes[pauseKey(root, target, c.name)] === undefined)
+    for (const c of notYet) s.writes[pauseKey(root, target, c.name)] = now
+    return notYet
   })
   if (!collisions.length) return NOTHING
   if (!pause) return duplicateDecision(collisions, false)
-  // The same write sent again passes, with nothing said. A pause that could not be recorded is not made.
-  if (alreadyPaused || !saved) return NOTHING
-  return duplicateDecision(collisions, true)
+  // A name already paused for this file passes, with nothing said. A pause that could not be recorded is not made.
+  if (!fresh.length || !saved) return NOTHING
+  return duplicateDecision(fresh, true)
 }
 
 export async function guardrailsOnEvent(io: Io, ev: AgentEvent): Promise<Decision> {
@@ -204,9 +205,16 @@ export async function guardrailsOnEvent(io: Io, ev: AgentEvent): Promise<Decisio
       if (!loopOn) return NOTHING
       const facts = { shell: tool.shell, command: tool.command, background: tool.background, cwd: ev.cwd, agent: ev.agent }
       if (ev.ok) {
+        // A command line that prints its own exit status: a non-zero one printed is a failure.
+        const printed = printedExitStatus(tool.command, ev.output)
+        if (printed && printed.exitCode !== 0) {
+          const { result } = await withSession(io, root, ev.session, (s, now) => recordFailure(s, now, { ...facts, output: printed.output, exitCode: printed.exitCode }, cfg))
+          return result
+        }
+        // A success ends that command's count; nothing to write when there is none.
         const probe = await readSession(io, root, ev.session)
-        const counted = Object.keys(probe.agents).length > 0
-        if (!counted && isReadOnlyCommand(tool.command)) return NOTHING
+        const key = commandFingerprint(tool.shell, tool.command, ev.cwd)
+        if (!Object.values(probe.agents).some(b => b[key])) return NOTHING
         await withSession(io, root, ev.session, s => recordSuccess(s, facts))
         return NOTHING
       }
@@ -214,7 +222,7 @@ export async function guardrailsOnEvent(io: Io, ev: AgentEvent): Promise<Decisio
       return result
     }
     if ((tool.kind === 'write' || tool.kind === 'edit' || tool.kind === 'notebook') && ev.ok) {
-      if (loopOn) await withSession(io, root, ev.session, s => recordChange(s))
+      // An edit does not reset the loop breaker (the lead's rule after the behaviour review).
       const rel = relativeTo(root, tool.path)
       if (dupOn && rel && tool.kind !== 'notebook') await withLock(io, root, 'index/recent', () => updateIndexedFile(io, root, rel))
     }
@@ -265,12 +273,13 @@ export async function guardrailsHealthLines(io: Io, root: string): Promise<strin
   if (cfg.duplicateGuard.mode !== 'off') {
     lines.push(
       meta
-        ? `    index ${join('.flowky/cache', 'index')}: ${meta.symbolCount} definitions in ${meta.indexedFiles} of ${meta.fileCount} source files${meta.complete ? '' : ', PARTIAL (continues at the next session start)'}, built ${ago(now, meta.builtAt)} in ${meta.elapsedMs} ms; languages: ${meta.languages.join(', ') || 'none found'}`
+        ? `    index ${join('.flowky/cache', 'index')}: ${meta.symbolCount} definitions from ${meta.indexedFiles - meta.skipped.generated - meta.skipped.minified} source files read; left out: ${meta.skipped.generated} with a generated marker, ${meta.skipped.minified} minified, ${meta.skipped.tooLarge} over 1 MB${meta.indexedFiles < meta.fileCount ? `, ${meta.fileCount - meta.indexedFiles} not read yet` : ''}${meta.complete ? '' : ' (PARTIAL: continues at the next session start)'}; built ${ago(now, meta.builtAt)} in ${meta.elapsedMs} ms; languages: ${meta.languages.join(', ') || 'none found'}`
         : '    index: not built yet (built at the next session start)',
     )
   }
   lines.push(`  loop breaker: ${mode(cfg.loopBreaker.mode)}, after ${cfg.loopBreaker.threshold} identical failures${quiet}; reset with ${RETRY_COMMAND} or the message "flowky retry"`)
-  lines.push(`  staleness line: ${cfg.staleness.enabled ? 'ON' : 'OFF (guardrails in .flowky/config.json)'}${quiet}`)
+  const gitHere = (await io.stat(join(root, '.git')).catch(() => undefined)) !== undefined
+  lines.push(`  staleness line: ${cfg.staleness.enabled ? `ON${gitHere ? '' : ' (no git repository here: nothing to compare)'}` : 'OFF (guardrails in .flowky/config.json)'}${quiet}`)
   lines.push(`  config doctor: ${DOCTOR_COMMAND} (diagnoses only); daily summary at session start ${cfg.configDoctor.sessionSummary ? 'on' : 'off'}`)
   const advice = oldGuardAdvice(old)
   if (advice) lines.push(`  WARNING: ${advice}`)
