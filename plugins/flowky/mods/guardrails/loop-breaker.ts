@@ -139,7 +139,7 @@ export function printedExitStatus(command: string, output: string | undefined): 
   if (!m) return undefined
   const before = m[2]!.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   const after = m[4]!.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  const out = String(output ?? '').replace(/\r\n?/g, '\n').replace(/\n+$/, '')
+  const out = String(output ?? '').replace(/\r\n?/g, '\n').replace(/(\n\s*Shell cwd was reset to [^\n]*)+\s*$/, '').replace(/\n+$/, '')
   const last = out.slice(out.lastIndexOf('\n') + 1).trim()
   const v = new RegExp(`^${before}(-?\\d{1,6})${after}$`).exec(last)
   if (!v) return undefined

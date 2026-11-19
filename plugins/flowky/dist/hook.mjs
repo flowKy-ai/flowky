@@ -1922,7 +1922,7 @@ function printedExitStatus(command, output) {
   if (!m) return void 0;
   const before = m[2].replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const after = m[4].replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const out = String(output ?? "").replace(/\r\n?/g, "\n").replace(/\n+$/, "");
+  const out = String(output ?? "").replace(/\r\n?/g, "\n").replace(/(\n\s*Shell cwd was reset to [^\n]*)+\s*$/, "").replace(/\n+$/, "");
   const last = out.slice(out.lastIndexOf("\n") + 1).trim();
   const v = new RegExp(`^${before}(-?\\d{1,6})${after}$`).exec(last);
   if (!v) return void 0;
@@ -3021,7 +3021,7 @@ function claudeEvent(io, eventName, input) {
       const exit = typeof r.exit_code === "number" ? r.exit_code : typeof r.exitCode === "number" ? r.exitCode : void 0;
       const failed = r.success === false || exit !== void 0 && exit !== 0;
       if (failed) return { kind: "afterTool", tool: tool(), ok: false, exitCode: exit, error: str(r.error) || str(r.stderr), ...where };
-      const output = [str(r.stdout), str(r.stderr)].filter(Boolean).join("\n").slice(0, 2e5);
+      const output = str(r.stdout).slice(0, 2e5);
       return { kind: "afterTool", tool: tool(), ok: true, output: output || void 0, ...where };
     }
     case "PostToolUseFailure": {

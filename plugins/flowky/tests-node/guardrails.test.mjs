@@ -155,7 +155,7 @@ test('loop breaker: edit, run, same failure trips at the third failure; a sub-ag
   assert.match(hook('PostToolUseFailure', { ...pre, error: FAIL }, dir).hookSpecificOutput.additionalContext, /3 times/)
   assert.match(hook('PostToolUseFailure', { ...pre, error: FAIL, agent_id: 'sub-1', agent_type: 'Explore' }, dir).hookSpecificOutput.additionalContext, /3 times/)
   // The model's own spelling in the behaviour review: the shell reports success, the line says EXIT:1.
-  const hidden = { session_id: 's2', cwd: dir, tool_name: 'Bash', tool_input: { command: 'npm test > /dev/null 2>&1; echo "EXIT:$?"' }, tool_response: { stdout: 'EXIT:1\n', stderr: '', interrupted: false, isImage: false } }
+  const hidden = { session_id: 's2', cwd: dir, tool_name: 'Bash', tool_input: { command: 'npm test > /dev/null 2>&1; echo "EXIT:$?"' }, tool_response: { stdout: 'EXIT:1', stderr: '\nShell cwd was reset to ' + dir, interrupted: false, isImage: false, noOutputExpected: false } }
   assert.deepEqual(hook('PostToolUse', hidden, dir), {})
   assert.deepEqual(hook('PostToolUse', hidden, dir), {})
   assert.match(hook('PostToolUse', hidden, dir).hookSpecificOutput.additionalContext, /has failed 3 times in a row with the same error \(exit code 1\)/)

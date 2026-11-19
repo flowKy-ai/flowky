@@ -86,7 +86,8 @@ const claude: Agent = {
     return fromClaude((await dispatch(io, 'GuardPostToolUse', input, 'test')).output)
   },
   async shellOkWith(io, root, session, command, output) {
-    const input: HookInput = { session_id: session, cwd: root, hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command }, tool_response: { stdout: output, stderr: '', interrupted: false, isImage: false } }
+    // As a real run showed: the printed status on stdout, Claude Code's own line on stderr.
+    const input: HookInput = { session_id: session, cwd: root, hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command }, tool_response: { stdout: output.replace(/\n$/, ''), stderr: '\nShell cwd was reset to C:\work\app', interrupted: false, isImage: false, noOutputExpected: false } }
     return fromClaude((await dispatch(io, 'GuardPostToolUse', input, 'test')).output)
   },
   async say(io, root, session, text) {

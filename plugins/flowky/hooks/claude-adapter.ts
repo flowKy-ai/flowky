@@ -89,8 +89,10 @@ export function claudeEvent(io: Io, eventName: string, input: HookInput): AgentE
       const exit = typeof r.exit_code === 'number' ? r.exit_code : typeof r.exitCode === 'number' ? r.exitCode : undefined
       const failed = r.success === false || (exit !== undefined && exit !== 0)
       if (failed) return { kind: 'afterTool', tool: tool(), ok: false, exitCode: exit, error: str(r.error) || str(r.stderr), ...where }
-      // PostToolUse for Bash: tool_response {stdout, stderr} (the reference's Bash output shape).
-      const output = [str(r.stdout), str(r.stderr)].filter(Boolean).join('\n').slice(0, 200_000)
+      // PostToolUse for Bash: tool_response {stdout, stderr} (the reference's Bash output shape). Only
+      // stdout is passed: a printed exit status is on stdout, and Claude Code adds lines of its own to
+      // stderr ("Shell cwd was reset to ...", seen in a real run).
+      const output = str(r.stdout).slice(0, 200_000)
       return { kind: 'afterTool', tool: tool(), ok: true, output: output || undefined, ...where }
     }
     case 'PostToolUseFailure': {
