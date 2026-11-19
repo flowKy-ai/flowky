@@ -123,7 +123,8 @@ test("F2: the reviewer's tree (40 files of 1 MB: a normal head, then hostile lin
   const dir = tempDir('flowky-perf-')
   mkdirSync(join(dir, 'src'))
   const head = 'export const x = 1\n'.repeat(3500)
-  const hostile = ('function' + ' '.repeat(2000) + '\n').repeat(Math.floor((1024 * 1024 - head.length - 1024) / 2009))
+  // 1,998 characters: under the 2,000 the old code still matched (the reviewer's input).
+  const hostile = ('function' + ' '.repeat(1990) + '\n').repeat(Math.floor((1024 * 1024 - head.length - 1024) / 1999))
   for (let i = 0; i < 40; i++) writeFileSync(join(dir, 'src', `f${i}.ts`), head + hostile)
   const r = hook('SessionStart', { session_id: 'p', cwd: dir, source: 'startup' }, dir, {}, 60000)
   assert.equal(r.code, 0)
