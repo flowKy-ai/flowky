@@ -32,12 +32,11 @@ Works alongside Claude Code, Cursor, Copilot, Gemini CLI, Windsurf and Cline. It
 ```bash
 # VS Code
 code --install-extension FlowKy.flowky
-
-# Or generate the config directly in any repo
-npx flowky init
 ```
 
-That writes:
+Then open the Command Palette and run **Generate Claude Configuration**. A command-line installer is not published yet; until it is, the extension is the only supported way to install FlowKy.
+
+The command writes:
 
 ```
 your-project/
@@ -122,3 +121,8 @@ Found a security issue? Do not open an issue — see [SECURITY.md](./SECURITY.md
 ## Licence
 
 [MIT](./LICENSE) for everything in this repository, including the starter. The FlowKy extension and web application are separately licensed.
+
+## Trademarks
+
+FlowKy is an independent product. It is not affiliated with, endorsed or sponsored by Anthropic, or by the makers of the other tools named in this repository. Claude and Claude Code are trademarks of Anthropic, PBC; all other names are trademarks of their respective owners.
+
