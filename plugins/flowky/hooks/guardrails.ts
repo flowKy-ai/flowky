@@ -59,6 +59,24 @@ export function isRetryOrder(text: string): boolean {
 
 // ---- session start ----
 
+/** Whether the person has not yet been shown this line in this session; records it. */
+async function tellOnce(io: Io, root: string, session: string, key: string): Promise<boolean> {
+  const sid = String(session || 'unknown').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 64) || 'unknown'
+  let told: Record<string, string[]> = {}
+  try {
+    const v = JSON.parse((await readSafe(io, join(root, '.flowky/cache/guard/told.json'), { maxBytes: 16 * 1024, root })) ?? '{}') as unknown
+    if (v && typeof v === 'object' && !Array.isArray(v)) told = v as Record<string, string[]>
+  } catch {
+    told = {}
+  }
+  const mine = Array.isArray(told[sid]) ? told[sid]!.filter(x => typeof x === 'string').slice(-10) : []
+  if (mine.includes(key)) return false
+  const next: Record<string, string[]> = { [sid]: [...mine, key] }
+  for (const [k, v] of Object.entries(told).slice(-20)) if (k !== sid && /^[A-Za-z0-9_-]{1,64}$/.test(k) && Array.isArray(v)) next[k] = v.filter(x => typeof x === 'string' && /^[0-9a-f]{16}$/.test(x)).slice(-10)
+  await writeStateText(io, root, 'guard/told.json', JSON.stringify(next) + '\n').catch(() => undefined)
+  return true
+}
+
 async function lastDoctorRun(io: Io, root: string): Promise<number | undefined> {
   const text = await readSafe(io, join(root, '.flowky/cache/guard/doctor.json'), { maxBytes: 256, root })
   try {
@@ -106,13 +124,9 @@ export async function guardrailsAtStart(io: Io, ev: Extract<AgentEvent, { kind: 
       if (line) {
         // Claude gets the line at every session start (compact included); the person sees it once per
         // session (systemMessage: "Warning message shown to the user").
-        const key = digest(line)
-        // Not recorded (FlowKy Pro before the folder is trusted): it is shown again at the next start.
-        const { result: firstTime } = await withSession(io, root, ev.session, s => {
-          if (s.toldStart.includes(key)) return false
-          s.toldStart.push(key)
-          return true
-        })
+        // Kept in an unstamped display-only file, so it also works before the folder is trusted (FlowKy
+        // Pro); a forged file can only make the person's line quieter.
+        const firstTime = await tellOnce(io, root, ev.session, digest(line))
         parts.push({ contextForAgent: line, ...(firstTime ? { messageForUser: line } : {}) })
       }
     }

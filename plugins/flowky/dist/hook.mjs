@@ -1876,8 +1876,14 @@ async function scrubOldErrorLines(io, root) {
   const now = await io.now();
   let erased = 0;
   for (const e of entries.filter((x) => x.kind === "file" && /^session-[A-Za-z0-9_-]{1,64}\.json$/.test(x.name)).slice(0, MAX_SESSIONS * 2)) {
-    const name = `${GUARD_DIR}/${e.name.slice(0, -".json".length)}`;
-    const raw = await readState(io, root, name, {});
+    const path = join(dir, e.name);
+    let raw;
+    try {
+      raw = JSON.parse(await readSafe(io, path, { maxBytes: MAX_STATE_BYTES * 4, root }) ?? "");
+    } catch {
+      continue;
+    }
+    if (!raw || typeof raw !== "object") continue;
     const agents = raw.agents;
     if (!agents || typeof agents !== "object") continue;
     let changed = 0;
@@ -1891,7 +1897,7 @@ async function scrubOldErrorLines(io, root) {
       }
     }
     if (changed) {
-      await writeState(io, root, name, raw);
+      await writeStateText(io, root, `${GUARD_DIR}/${e.name}`, JSON.stringify(raw, null, 2) + "\n").catch(() => void 0);
       erased += changed;
     }
   }
@@ -2565,6 +2571,22 @@ async function failOpen(io, root, where, f) {
 function isRetryOrder(text) {
   return /^\s*flowky\s+retry[.!]?\s*$/i.test(String(text ?? ""));
 }
+async function tellOnce(io, root, session, key) {
+  const sid = String(session || "unknown").replace(/[^A-Za-z0-9_-]/g, "").slice(0, 64) || "unknown";
+  let told = {};
+  try {
+    const v = JSON.parse(await readSafe(io, join(root, ".flowky/cache/guard/told.json"), { maxBytes: 16 * 1024, root }) ?? "{}");
+    if (v && typeof v === "object" && !Array.isArray(v)) told = v;
+  } catch {
+    told = {};
+  }
+  const mine = Array.isArray(told[sid]) ? told[sid].filter((x) => typeof x === "string").slice(-10) : [];
+  if (mine.includes(key)) return false;
+  const next = { [sid]: [...mine, key] };
+  for (const [k, v] of Object.entries(told).slice(-20)) if (k !== sid && /^[A-Za-z0-9_-]{1,64}$/.test(k) && Array.isArray(v)) next[k] = v.filter((x) => typeof x === "string" && /^[0-9a-f]{16}$/.test(x)).slice(-10);
+  await writeStateText(io, root, "guard/told.json", JSON.stringify(next) + "\n").catch(() => void 0);
+  return true;
+}
 async function lastDoctorRun(io, root) {
   const text = await readSafe(io, join(root, ".flowky/cache/guard/doctor.json"), { maxBytes: 256, root });
   try {
@@ -2599,12 +2621,7 @@ async function guardrailsAtStart(io, ev, facts = {}) {
       const extension = extCommit && head && await left() > 400 ? await driftSince(io, root, extCommit, head, Math.min(4e3, await left() - 300)) : void 0;
       const line = startLine({ own, extension });
       if (line) {
-        const key = digest(line);
-        const { result: firstTime } = await withSession(io, root, ev.session, (s) => {
-          if (s.toldStart.includes(key)) return false;
-          s.toldStart.push(key);
-          return true;
-        });
+        const firstTime = await tellOnce(io, root, ev.session, digest(line));
         parts.push({ contextForAgent: line, ...firstTime ? { messageForUser: line } : {} });
       }
     }

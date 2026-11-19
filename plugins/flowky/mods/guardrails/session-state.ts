@@ -11,7 +11,7 @@
 
 import type { Io } from '../io'
 import { join, readSafe } from '../io'
-import { STATE_DIR, readState, stateDir, updateState, writeState } from '../state'
+import { STATE_DIR, readState, stateDir, updateState, writeStateText } from '../state'
 
 export const GUARD_DIR = 'guard'
 export const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000
@@ -225,8 +225,15 @@ export async function scrubOldErrorLines(io: Io, root: string): Promise<number> 
   const now = await io.now()
   let erased = 0
   for (const e of entries.filter(x => x.kind === 'file' && /^session-[A-Za-z0-9_-]{1,64}\.json$/.test(x.name)).slice(0, MAX_SESSIONS * 2)) {
-    const name = `${GUARD_DIR}/${e.name.slice(0, -'.json'.length)}`
-    const raw = await readState<Record<string, unknown>>(io, root, name, {})
+    // Read and written as they are (a machine stamp, if any, is kept): erasing is never trust-sensitive.
+    const path = join(dir, e.name)
+    let raw: Record<string, unknown>
+    try {
+      raw = JSON.parse((await readSafe(io, path, { maxBytes: MAX_STATE_BYTES * 4, root })) ?? '') as Record<string, unknown>
+    } catch {
+      continue
+    }
+    if (!raw || typeof raw !== 'object') continue
     const agents = raw.agents
     if (!agents || typeof agents !== 'object') continue
     let changed = 0
@@ -240,7 +247,7 @@ export async function scrubOldErrorLines(io: Io, root: string): Promise<number> 
       }
     }
     if (changed) {
-      await writeState(io, root, name, raw)
+      await writeStateText(io, root, `${GUARD_DIR}/${e.name}`, JSON.stringify(raw, null, 2) + '\n').catch(() => undefined)
       erased += changed
     }
   }
