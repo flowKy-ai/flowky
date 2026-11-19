@@ -20,7 +20,8 @@ export const MAP_PATH = `${STATE_DIR}/project-map.md`
 export const LEGACY_MAP_PATH = '.claude/project-map.md'
 const FINGERPRINT = /<!-- flowky-map fingerprint:([0-9a-f]+) -->/
 
-export type ScanFile = { path: string; size: number }
+/** `mtimeMs`: the modification time the folder listing gave (the symbol index compares it between sessions). */
+export type ScanFile = { path: string; size: number; mtimeMs?: number }
 
 export type Scan = {
   files: ScanFile[]
@@ -82,7 +83,7 @@ export async function scanTree(io: Io, root: string, budgetMs: number, maxFiles:
         queue.push(path)
       } else if (e.kind === 'file') {
         if (isIgnored(rules, path, false)) continue
-        files.push({ path, size: e.size })
+        files.push({ path, size: e.size, mtimeMs: e.mtimeMs })
         const depth = path.split('/').length
         if (depth <= 2 && MANIFEST_NAMES.has(e.name) && e.size <= MANIFEST_MAX_BYTES) {
           const text = await io.readText(join(root, path))

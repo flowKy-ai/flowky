@@ -128,17 +128,21 @@ export function nodeIo(): Io {
       }
     },
     async list(dir) {
-      const out: Entry[] = []
       const entries = await fs.readdir(dir, { withFileTypes: true })
-      for (const e of entries) {
-        if (e.isSymbolicLink()) {
-          out.push({ name: e.name, kind: 'other', size: 0, mtimeMs: 0 })
-          continue
-        }
-        if (e.isFile()) {
-          const st = await fs.stat(`${dir}/${e.name}`).catch(() => undefined)
-          out.push({ name: e.name, kind: 'file', size: st?.size ?? 0, mtimeMs: st?.mtimeMs ?? 0 })
-        } else out.push({ name: e.name, kind: e.isDirectory() ? 'dir' : 'other', size: 0, mtimeMs: 0 })
+      // The files' sizes and times are read 32 at a time (one after the other is slow on Windows).
+      const out: Entry[] = []
+      for (let i = 0; i < entries.length; i += 32) {
+        const batch = await Promise.all(
+          entries.slice(i, i + 32).map(async (e): Promise<Entry> => {
+            if (e.isSymbolicLink()) return { name: e.name, kind: 'other', size: 0, mtimeMs: 0 }
+            if (e.isFile()) {
+              const st = await fs.stat(`${dir}/${e.name}`).catch(() => undefined)
+              return { name: e.name, kind: 'file', size: st?.size ?? 0, mtimeMs: st?.mtimeMs ?? 0 }
+            }
+            return { name: e.name, kind: e.isDirectory() ? 'dir' : 'other', size: 0, mtimeMs: 0 }
+          }),
+        )
+        out.push(...batch)
       }
       return out
     },

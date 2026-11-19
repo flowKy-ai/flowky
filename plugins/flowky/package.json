@@ -1,6 +1,6 @@
 {
   "name": "flowky-plugin",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "description": "FlowKy for Claude Code: development tooling. The plugin itself needs no install step.",
   "license": "MIT",

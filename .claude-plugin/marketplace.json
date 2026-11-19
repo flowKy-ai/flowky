@@ -6,7 +6,7 @@
     {
       "name": "flowky",
       "source": "./plugins/flowky",
-      "description": "Project map at session start, context-size hints with a handoff summary command, and a health check. No network request, no model call."
+      "description": "Project map at session start, context-size hints with a handoff summary command, four guardrails (duplicate guard, loop breaker, staleness line, config doctor) and a health check. No network request, no model call."
     }
   ]
 }

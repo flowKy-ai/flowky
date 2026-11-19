@@ -1,14 +1,15 @@
 # FlowKy for Claude Code
 
 A map of your project at every session start, one clear hint before your context grows large, a
-handoff summary so you can compact without losing work, and a health check that says what is
-running. The plugin makes no network request and no model call. MIT licence.
+handoff summary so you can compact without losing work, four guardrails (a duplicate guard, a
+three-strike loop breaker, a git staleness line and a configuration doctor), and a health check
+that says what is running. The plugin makes no network request and no model call. MIT licence.
 
 > FlowKy is an independent product. It is not affiliated with, endorsed or sponsored by Anthropic,
 > or by the makers of the other tools named here. Claude and Claude Code are trademarks of
 > Anthropic, PBC.
 
-Status: version 0.3.0, an early version. There is no published benchmark and this README states no
+Status: version 0.4.0, an early version. There is no published benchmark and this README states no
 savings figure. Tested on Claude Code 2.1.327 on Windows 11; other versions with plugin hooks should
 work but have not been tested.
 
@@ -18,15 +19,14 @@ work but have not been tested.
 |---|---|
 | Project map | At session start, a fast scan of the file tree (no model call, `.gitignore` respected, 1.5 s budget) writes `.flowky/cache/project-map.md`: stack, entry points, build, test and typecheck commands, key folders, 3D and UI modules, and the files too large or generated to read whole. It is rebuilt from the tree at every session start, because a copy on disk could have come from someone else, and added to Claude's context. `/flowky:map` rescans on demand; the `project-map` skill tells Claude to read the map before exploring. |
 | Context hygiene and handoff | When Claude finishes a turn, the plugin reads the context size from the session's own usage records. Past a threshold (60k tokens by default) it shows you one hint and offers `/flowky:handoff`, which asks Claude for a technical summary (decisions, files touched, open items, next step) saved to `.flowky/cache/handoff.md`. You can then `/compact` or `/clear` and carry on. It never sends anything by itself. |
-| Health check | `/flowky:health` says what is active, what is off and why: config errors, a missing Node, which layer answered, what the former name left behind, and whether two FlowKy plugins are enabled at once. |
+| Duplicate guard | Before Claude writes or edits a file that defines a function or class whose name is already defined in another file of the project, the write is paused once and Claude reads where the existing one is (file, line and its first line), to reuse or extend it. The same write sent again goes through: it asks once, it never blocks. Tests, generated and vendored files, re-exports, the file's own definitions, a rename in place and a name defined in five or more files are left alone. A `note` mode lets the write through at once and tells Claude the same facts. |
+| Loop breaker | When the same shell command (Bash or PowerShell) fails three times in a row with the same error and nothing in the project changed in between, Claude reads the real error, quoted, and that running it unchanged will fail the same way. The next identical run is paused once; sent again, it runs. `/flowky:retry`, or the message `flowky retry` on its own, resets the count. |
+| Staleness line | At session start, one line when the FlowKy VS Code extension's committed map (`.flowky/index`) was generated at another commit than HEAD (how many commits, which folders changed), or when the plugin's own index is still partial; during a session, one line when HEAD moves (a checkout or a pull). Silent otherwise. Local git data only. |
+| Config doctor | `/flowky:config-doctor` checks your `CLAUDE.md` files, rules, skills, `AGENTS.md` and Claude Code settings: the nine checks of the FlowKy VS Code extension plus ten more (instructions lost after compaction, dead paths and commands, duplicates, a second copy of the guard...). It only diagnoses: every finding says what to change and where, and it changes nothing. Once a day, at session start, one line if it finds an error. |
+| Health check | `/flowky:health` says what is active, what is off and why: config errors, a missing Node, which layer answered, the guardrails and their index, what the former name left behind, and whether two FlowKy plugins are enabled at once. |
 
 ## Coming
 
-These are planned and not built yet; nothing below runs in 0.3.0.
-
-- `/flowky:config-doctor`: a check of your `CLAUDE.md` and rules files. The name is reserved.
-- `/flowky:retry` and the guardrails it belongs to (a duplicate-definition guard, a loop breaker for
-  a command that keeps failing the same way, a staleness line on the map). The name is reserved.
 - FlowKy Pro, a separate plugin from flowky.ai. It is not on sale yet.
 
 ## Install
@@ -55,6 +55,8 @@ without Node and says that no hook has run.
 | Context hint | at the end of each turn, from the transcript's usage rows, as a message to you | a live status line from `session.measure`, and one toast at the threshold |
 | Handoff | the `/flowky:handoff` skill (one model turn: the summary itself) | `/flowky handoff` puts the request in your prompt box; it sends it only if `context.autoSubmit` asks for it AND you confirmed that yourself with `/flowky handoff auto on` |
 | Health check | the `/flowky:health` skill (one short turn) | `/flowky health`, answered at once, with no model turn |
+| Guardrails | command hooks: the same in both layers | the same |
+| Config doctor, retry | the `/flowky:config-doctor` and `/flowky:retry` skills (one short turn) | `/flowky config-doctor` and `/flowky retry`, with no model turn |
 
 The mods layer was tested on Claude Code 2.1.327. Where mods are unavailable or switched off by an
 organisation, the baseline does all the work.
@@ -80,9 +82,22 @@ An optional file, `.flowky/config.json`, in your project; every key has a defaul
 ```json
 {
   "map": { "enabled": true, "timeBudgetMs": 1500, "maxFiles": 20000, "addToContext": true },
-  "context": { "enabled": true, "thresholdTokens": 60000, "autoSubmit": false }
+  "context": { "enabled": true, "thresholdTokens": 60000, "autoSubmit": false },
+  "guardrails": {
+    "duplicateGuard": { "mode": "pause-once", "ignore": [] },
+    "loopBreaker": { "mode": "pause-once", "threshold": 3 },
+    "staleness": true,
+    "configDoctor": true
+  }
 }
 ```
+
+Guardrails: each can be switched off (`false` or `"off"`); the duplicate guard and the loop breaker
+can be set to `"note"` (Claude is told, nothing is paused); the loop breaker's threshold can be
+raised up to 10; `ignore` lists names the duplicate guard never reports; `configDoctor: false` stops
+the daily one-line summary (the command still works). Because this file can come with a repository
+you clone, it can only make the guardrails quieter: nothing in it can lower the threshold below 3,
+pause more than once, run a command, or put text of its own into Claude's context.
 
 `autoSubmit` affects only the mods layer's `/flowky handoff`; the baseline never sends a prompt.
 Because this file can come with a repository you clone, `autoSubmit: true` alone does nothing: the
@@ -98,8 +113,9 @@ on purpose (its index, audit and skills). This plugin therefore writes only insi
 `.flowky/cache/`, never anywhere else in `.flowky/`, and never adds an ignore rule that would hide
 the extension's files.
 
-- `.flowky/cache/` holds the map, the handoff Claude writes with its own Write tool, and small JSON
-  state for the health check. It carries its own `.gitignore` containing `*`, written before
+- `.flowky/cache/` holds the map, the handoff Claude writes with its own Write tool, small JSON
+  state for the health check, the duplicate guard's symbol index (`index/`) and the guardrails'
+  per-session state (`guard/`, kept at most 7 days and 30 sessions, 64 KB each). It carries its own `.gitignore` containing `*`, written before
   anything else, so none of it is committed by accident.
 - Every write refuses a path outside the project and a symbolic link or junction on the way, and
   goes through a temporary file renamed over the target. A `.flowky/cache` folder or a `handoff.md`
@@ -116,8 +132,14 @@ SessionStart hook therefore writes only inside the project's ignored `.flowky/ca
 
 - No network request, no model call and no telemetry from the plugin. A test fails the build if the
   shipped code imports a network module or opens a connection.
-- The hooks start one program: the health check runs `git ls-files` to flag plugin files committed
-  in the repository. Git is looked up on `PATH`, never in the project folder.
+- The hooks start one program, git, looked up on `PATH`, never in the project folder: at session
+  start `git rev-parse HEAD`, and when the extension's map exists `git rev-list --count` and
+  `git diff --name-only` between two commits (2 s each, no fetch, no network, the stored commit
+  accepted only as plain hex); the health check runs `git ls-files` to flag plugin files committed
+  in the repository.
+- The duplicate guard reads the source files of the project to index their top-level definitions,
+  and, before it names one, the line of that file again. What reaches Claude is a file name, a line
+  number, a name and that one line, stripped of control characters and cut short.
 - The hooks read your file tree (names and sizes), small manifest files (`package.json`,
   `pyproject.toml`, `Cargo.toml` and similar), `.gitignore` files, the tail of the session transcript
   (only the usage numbers of the last answers), and the `enabledPlugins` lists of your Claude Code
@@ -140,6 +162,18 @@ with the plugin disabled, and compare `/cost` (or `/usage`) and the number of `R
 - In the baseline layer the context is measured when a turn ends, from the transcript, which Claude
   Code writes asynchronously, so the figure can lag by one request.
 - Hooks cannot change the model or compact the conversation for you: the plugin only informs.
+- The duplicate guard is lexical, not a parser. It indexes top-level definitions of TypeScript and
+  JavaScript (exported functions, classes and arrow constants), Python (`def` and `class` at column
+  0, not starting with `_`), Go (capitalised `func`, not methods) and Rust (`pub fn`, `pub struct`,
+  `pub enum`, `pub trait`). Other languages are not indexed. It misses a definition spread over
+  several lines before its name, one made by a macro or a decorator factory, and CommonJS
+  `module.exports` exports; two unrelated exported functions with the same name in different
+  modules are reported once, and the same write sent again goes through.
+- The index is built at session start within 2.5 s (about 1.5 s for 10,000 files on the test
+  machine), then incrementally from file sizes and times; a larger tree is finished over the next
+  sessions.
+- The loop breaker sees only what Claude runs: a fix made in your editor between two failures is not
+  seen as a change (a different error still ends the streak).
 
 ## Development
 

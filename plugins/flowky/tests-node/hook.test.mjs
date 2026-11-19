@@ -64,7 +64,7 @@ test('health prints a plain-text report with the independence notice', () => {
   run('SessionStart', { session_id: 'e2e', cwd: dir })
   const r = spawnSync(process.execPath, [HOOK, 'health'], { cwd: dir, input: '', encoding: 'utf8', env: { ...process.env, CLAUDE_PROJECT_DIR: dir } })
   assert.equal(r.status, 0)
-  assert.match(r.stdout, /flowky 0\.3\.0 health check/)
+  assert.match(r.stdout, /flowky 0\.4\.0 health check/)
   assert.match(r.stdout, /FlowKy is an independent product\. It is not affiliated with, endorsed or sponsored by Anthropic/)
   assert.match(r.stdout, /Project map: ON, written/)
   assert.ok(existsSync(join(dir, '.flowky', 'cache', 'status.json')))

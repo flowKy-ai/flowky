@@ -9,3 +9,4 @@
 import './baseline.suite'
 import './hardening-shared.suite'
 import './migration.suite'
+import './guardrails.suite'

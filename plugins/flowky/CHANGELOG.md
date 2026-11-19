@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.4.0
+
+The four guardrails, in the shared core (FlowKy Pro runs the same code):
+
+- Duplicate guard: a symbol index the plugin builds itself at session start (TypeScript and
+  JavaScript, Python, Go, Rust; incremental; 2.5 s budget; `.flowky/cache/index/`), and a
+  PreToolUse check on Write, Edit and MultiEdit that pauses a write once when it defines a name
+  already defined in another file, with that file, line and first line. The same write sent again
+  passes. `note` mode: context only.
+- Loop breaker: failed Bash and PowerShell commands are counted from PostToolUseFailure, per session
+  and per sub-agent; the third identical failure gives Claude the real error; the next identical run
+  is paused once. Reset: success, a change of the project, `/flowky:retry` or the message
+  `flowky retry`.
+- Staleness line: the extension's committed map generated at another commit than HEAD, a partial
+  index, and HEAD moving during a session, each said in one line; silent otherwise.
+- Config doctor: `/flowky:config-doctor`, the extension's nine checks plus ten more; diagnoses only.
+- New hook events: UserPromptSubmit, PreToolUse, PostToolUse, PostToolUseFailure. A project that
+  still wires the FlowKy VS Code extension's old guard hook keeps the plugin's guardrails quiet,
+  and the doctor and the health check say how to remove it.
+- `.flowky/config.json` gets a `guardrails` section that can only make them quieter.
+- Faster tree scan (file sizes read 32 at a time).
+
 ## 0.3.0
 
 First release under the FlowKy name. The code comes from Autopilot Lite 0.2.2, an MIT plugin by the

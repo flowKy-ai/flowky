@@ -11,6 +11,7 @@ import { STATE_DIR, STATE_GITIGNORE, readState, stateDir } from '../mods/state'
 import type { LiteStatus } from '../mods/state'
 import { PLUGIN, VERSION } from './identity'
 import { INDEPENDENCE, bothEnabledLine, migrationLines } from './health-common'
+import { guardrailsHealthLines } from './guardrails'
 
 export { VERSION }
 
@@ -75,6 +76,8 @@ export async function healthReport(io: Io, root: string, facts: HealthFacts): Pr
     )
     lines.push(`  auto-submit of the handoff request: ${config.context.autoSubmit ? 'requested by .flowky/config.json; it submits only after you confirm it with the handoff auto on command (mods layer only)' : 'off: the request is only placed in the prompt box'}`)
   }
+  lines.push('')
+  lines.push(...(await guardrailsHealthLines(io, root).catch(() => ['Guardrails: their state could not be read'])))
   lines.push('')
   const tracked = await io.run(['git', 'ls-files', '--', STATE_DIR, LEGACY_MAP_PATH, '.claude/handoff.md'], { cwd: root, timeoutMs: 3000 })
   if (tracked.exitCode === 0 && tracked.stdout.trim()) lines.push(`FLAG: plugin files are committed in this repository (the plugin regenerates or ignores them; remove them from git): ${tracked.stdout.trim().split(/\r?\n/).slice(0, 6).join(', ')}`)

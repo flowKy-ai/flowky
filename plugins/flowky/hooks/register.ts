@@ -2,7 +2,7 @@
 // is available and allowed. Everything essential already runs in the baseline
 // layer (command hooks in hooks.json + skills); this module adds what only a
 // mod can do, with the same shared logic:
-//   - /flowky [health|map|handoff]: answered at once, with no model turn
+//   - /flowky [health|map|handoff|config-doctor|retry]: answered at once, with no model turn
 //   - a status-line meter of the context, from session.measure
 //   - the context hint as a toast as soon as the threshold is crossed
 //   - handoff: the summary request placed in the prompt box (or submitted, if
@@ -23,6 +23,7 @@ import { readState, writeState } from '../mods/state'
 import type { LiteStatus } from '../mods/state'
 import { VERSION, healthReport } from './health'
 import { COMMAND } from './identity'
+import { configDoctorCommand, retryCommand } from './guardrails'
 import { modIo } from './mod-io'
 
 
@@ -79,8 +80,8 @@ export const register: Register = on => {
     const local = await ioFor($)
     await $.command.register({
       name: 'flowky',
-      description: 'FlowKy: health (default), map (rescan now), handoff (request a clean summary; handoff auto on|off). No model turn.',
-      argumentHint: '[health|map|handoff [auto on|off]]',
+      description: 'FlowKy: health (default), map (rescan now), handoff (request a clean summary; handoff auto on|off), config-doctor (check the Claude configuration), retry (reset the loop breaker). No model turn.',
+      argumentHint: '[health|map|handoff [auto on|off]|config-doctor|retry]',
       immediate: true,
     })
     const status = await readState<LiteStatus>(local, root, 'status', {})
@@ -118,8 +119,13 @@ export const register: Register = on => {
       const r = await refreshMap(local, root, { budgetMs: config.map.timeBudgetMs, maxFiles: config.map.maxFiles })
       return { text: `Project map ${r.status}${r.reason ? ` (${r.reason})` : ''}.\n${r.text ?? ''}`, isTextDisplayOnly: true }
     }
+    if (verb === 'config-doctor') return { text: await configDoctorCommand(local, root), isTextDisplayOnly: true }
+    if (verb === 'retry') {
+      const id = await $.session.id().catch(() => undefined)
+      return { text: await retryCommand(local, root, typeof id === 'string' ? id : undefined), isTextDisplayOnly: true }
+    }
     if (verb !== '' && verb !== 'health') {
-      return { text: `Unknown subcommand "${verb}". Use: /${COMMAND} health | map | handoff`, isTextDisplayOnly: true }
+      return { text: `Unknown subcommand "${verb}". Use: /${COMMAND} health | map | handoff | config-doctor | retry`, isTextDisplayOnly: true }
     }
     const version = await $.session.version().catch(() => undefined)
     return {
