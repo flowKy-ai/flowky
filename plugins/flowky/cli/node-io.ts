@@ -318,6 +318,9 @@ export function nodeIo(): Io {
     },
     async hashFile(path) {
       try {
+        // The same refusals as the reads: a regular file only, never through a link, at most 64 MB.
+        const st = await fs.lstat(path)
+        if (!st.isFile() || st.size > 64 * 1024 * 1024) return undefined
         return createHash('sha256').update(await fs.readFile(path)).digest('hex').slice(0, 32)
       } catch {
         return undefined

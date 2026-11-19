@@ -1736,7 +1736,7 @@ var MAX_AGENTS = 10;
 var MAX_COMMANDS = 40;
 var MAX_STATE_BYTES = 64 * 1024;
 function emptySession(now) {
-  return { v: 1, updatedAt: now, epoch: 0, saidHeads: [], writes: /* @__PURE__ */ Object.create(null), removed: /* @__PURE__ */ Object.create(null), agents: /* @__PURE__ */ Object.create(null) };
+  return { v: 1, updatedAt: now, epoch: 0, saidHeads: [], toldStart: [], writes: /* @__PURE__ */ Object.create(null), removed: /* @__PURE__ */ Object.create(null), agents: /* @__PURE__ */ Object.create(null) };
 }
 var KEY = /^[\w.:@/-]{1,200}$/;
 function sessionFile(session) {
@@ -1762,6 +1762,7 @@ function sanitizeSession(raw, now) {
   s.epoch = Number.isInteger(epoch) && epoch >= 0 && epoch < 1e9 ? epoch : 0;
   if (typeof r.head === "string" && /^[0-9a-f]{40}$/.test(r.head)) s.head = r.head;
   if (Array.isArray(r.saidHeads)) s.saidHeads = r.saidHeads.filter((h) => typeof h === "string" && /^[0-9a-f]{40}$/.test(h)).slice(-10);
+  if (Array.isArray(r.toldStart)) s.toldStart = r.toldStart.filter((h) => typeof h === "string" && /^[0-9a-f]{16}$/.test(h)).slice(-10);
   const rec = (v, max, keyOk) => {
     const out = /* @__PURE__ */ Object.create(null);
     if (!v || typeof v !== "object" || Array.isArray(v)) return out;
@@ -1869,6 +1870,33 @@ async function pruneGuardSessions(io, root) {
     if (i >= MAX_SESSIONS || now - e.mtimeMs > SESSION_TTL_MS) await io.removeInside(root, join(dir, e.name)).catch(() => void 0);
   }
 }
+async function scrubOldErrorLines(io, root) {
+  const dir = join(root, STATE_DIR, GUARD_DIR);
+  const entries = await io.list(dir).catch(() => []);
+  const now = await io.now();
+  let erased = 0;
+  for (const e of entries.filter((x) => x.kind === "file" && /^session-[A-Za-z0-9_-]{1,64}\.json$/.test(x.name)).slice(0, MAX_SESSIONS * 2)) {
+    const name = `${GUARD_DIR}/${e.name.slice(0, -".json".length)}`;
+    const raw = await readState(io, root, name, {});
+    const agents = raw.agents;
+    if (!agents || typeof agents !== "object") continue;
+    let changed = 0;
+    for (const cmds of Object.values(agents)) {
+      if (!cmds || typeof cmds !== "object") continue;
+      for (const c of Object.values(cmds)) {
+        if (c && typeof c === "object" && typeof c.err === "string" && c.err !== "" && !(typeof c.at === "number" && now - c.at <= ERROR_TTL_MS)) {
+          c.err = "";
+          changed++;
+        }
+      }
+    }
+    if (changed) {
+      await writeState(io, root, name, raw);
+      erased += changed;
+    }
+  }
+  return erased;
+}
 
 // mods/guardrails/loop-breaker.ts
 var NETWORK_THRESHOLD = 5;
@@ -1926,7 +1954,9 @@ function printedExitStatus(command, output) {
   const last = out.slice(out.lastIndexOf("\n") + 1).trim();
   const v = new RegExp(`^${before}(-?\\d{1,6})${after}$`).exec(last);
   if (!v) return void 0;
-  return { exitCode: Number(v[1]), output: out.slice(0, Math.max(0, out.lastIndexOf("\n"))) };
+  const code = Number(v[1]);
+  if (!Number.isInteger(code) || code < 0 || code > 255) return void 0;
+  return { exitCode: code, output: out.slice(0, Math.max(0, out.lastIndexOf("\n"))) };
 }
 function bucket(s, agent) {
   const k = agentKey(agent);
@@ -2104,7 +2134,7 @@ function startLine(facts) {
   if (ext2) {
     const since = ext2.behind !== void 0 ? `, ${ext2.behind} commit${ext2.behind === 1 ? "" : "s"} before HEAD (${ext2.head.slice(0, 7)})` : `; HEAD is now ${ext2.head.slice(0, 7)}`;
     const where = ext2.changed.length ? ` Changed since then: ${ext2.changed.map((c) => inline(c, 80)).join(", ")}.` : "";
-    parts.push(`FlowKy: the VS Code extension's project map (.flowky/index) was generated at ${ext2.commit.slice(0, 7)}${since}.${where} Its skill files can be out of date in those folders; the files themselves are the reference.`);
+    parts.push(`FlowKy: the committed project map of the VS Code extension (.flowky/index) is behind HEAD: generated at ${ext2.commit.slice(0, 7)}${since}.${where} Its skill files can be out of date in those folders; the files themselves are the reference.`);
   }
   return parts.length ? parts.join(" ") : void 0;
 }
@@ -2553,6 +2583,7 @@ async function guardrailsAtStart(io, ev, facts = {}) {
     const cfg = await loadGuardrails(io, root);
     const old = await findOldGuard(io, root);
     await pruneGuardSessions(io, root).catch(() => void 0);
+    await scrubOldErrorLines(io, root).catch(() => void 0);
     const head = await left() > 300 ? await headCommit(io, root, Math.min(2e3, await left() - 200)) : void 0;
     let own;
     if (cfg.duplicateGuard.mode !== "off" && !old.length && await left() > 1e3) {
@@ -2567,7 +2598,15 @@ async function guardrailsAtStart(io, ev, facts = {}) {
       const extCommit = head ? await extensionCommit(io, root) : void 0;
       const extension = extCommit && head && await left() > 400 ? await driftSince(io, root, extCommit, head, Math.min(4e3, await left() - 300)) : void 0;
       const line = startLine({ own, extension });
-      if (line) parts.push({ contextForAgent: line });
+      if (line) {
+        const key = digest(line);
+        const { result: firstTime } = await withSession(io, root, ev.session, (s) => {
+          if (s.toldStart.includes(key)) return false;
+          s.toldStart.push(key);
+          return true;
+        });
+        parts.push({ contextForAgent: line, ...firstTime ? { messageForUser: line } : {} });
+      }
     }
     if (cfg.configDoctor.sessionSummary && ev.source === "startup" && await left() > 1500) {
       const last = await lastDoctorRun(io, root);
@@ -2638,7 +2677,7 @@ async function guardrailsOnEvent(io, ev) {
       const { saved } = await withSession(io, root, ev.session, (x) => {
         x.saidHeads.push(now);
       });
-      return saved ? { contextForAgent: movedLine(from, now) } : NOTHING;
+      return saved ? { contextForAgent: movedLine(from, now), messageForUser: movedLine(from, now) } : NOTHING;
     }
     if (ev.kind === "stop") return NOTHING;
     const tool = ev.tool;
@@ -2662,6 +2701,7 @@ async function guardrailsOnEvent(io, ev) {
         const printed = printedExitStatus(tool.command, ev.output);
         if (printed && printed.exitCode !== 0) {
           const { result: result2 } = await withSession(io, root, ev.session, (s, now) => recordFailure(s, now, { ...facts, output: printed.output, exitCode: printed.exitCode }, cfg));
+          await scrubOldErrorLines(io, root).catch(() => void 0);
           return result2;
         }
         const probe = await readSession(io, root, ev.session);
@@ -2671,6 +2711,7 @@ async function guardrailsOnEvent(io, ev) {
         return NOTHING;
       }
       const { result } = await withSession(io, root, ev.session, (s, now) => recordFailure(s, now, { ...facts, output: ev.error, exitCode: ev.exitCode, interrupted: ev.interrupted }, cfg));
+      await scrubOldErrorLines(io, root).catch(() => void 0);
       return result;
     }
     if ((tool.kind === "write" || tool.kind === "edit" || tool.kind === "notebook") && ev.ok) {
@@ -3382,6 +3423,8 @@ function nodeIo() {
     },
     async hashFile(path) {
       try {
+        const st = await fs.lstat(path);
+        if (!st.isFile() || st.size > 64 * 1024 * 1024) return void 0;
         return createHash("sha256").update(await fs.readFile(path)).digest("hex").slice(0, 32);
       } catch {
         return void 0;

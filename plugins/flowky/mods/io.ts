@@ -170,6 +170,11 @@ export async function readSafe(io: Io, path: string, opts: ReadOptions): Promise
 /** Default cap for the small JSON files the plugin reads (config, state, settings). */
 export const SMALL_FILE_BYTES = 1024 * 1024
 
+/** A whole text file through readSafe, up to 16 MB (the plain readText's cap). */
+export function readWhole(io: Io, path: string, root?: string): Promise<string | undefined> {
+  return readSafe(io, path, { maxBytes: 16 * 1024 * 1024, root })
+}
+
 /** Reads (through readSafe) and parses a JSON file; undefined when missing or refused, `{ error }` when broken. */
 export async function readJson<T>(io: Io, path: string, opts: Partial<ReadOptions> = {}): Promise<{ value?: T; error?: string }> {
   const text = await readSafe(io, path, { maxBytes: SMALL_FILE_BYTES, ...opts })

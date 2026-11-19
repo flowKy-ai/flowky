@@ -143,7 +143,12 @@ export function printedExitStatus(command: string, output: string | undefined): 
   const last = out.slice(out.lastIndexOf('\n') + 1).trim()
   const v = new RegExp(`^${before}(-?\\d{1,6})${after}$`).exec(last)
   if (!v) return undefined
-  return { exitCode: Number(v[1]), output: out.slice(0, Math.max(0, out.lastIndexOf('\n'))) }
+  // A real exit status is 0 to 255. The line comes from command output, which a script can shape
+  // (a passing command printing "1" with no newline before `echo $?` reads "10"): a value above 255
+  // is not a status (second safety look). The worst a forged one can do is one needless note and pause.
+  const code = Number(v[1])
+  if (!Number.isInteger(code) || code < 0 || code > 255) return undefined
+  return { exitCode: code, output: out.slice(0, Math.max(0, out.lastIndexOf('\n'))) }
 }
 
 type ShellFacts = { shell: string; command: string; background: boolean; cwd: string; agent?: string }

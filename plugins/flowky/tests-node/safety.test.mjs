@@ -57,10 +57,30 @@ function canSymlinkFiles() {
 
 // ---- F1: one shared reader for every read ----
 
-test('F1: every read in the core goes through the shared reader (no direct readText, readRange, readFile or fs)', () => {
-  const drivers = new Set(['cli/node-io.ts', 'hooks/mod-io.ts', 'mods/io.ts'])
+/** Every shipped source file of this plugin (core and per-plugin, FlowKy Pro's in its build). */
+function shippedSources() {
+  const out = []
+  const walk = rel => {
+    const dir = join(PLUGIN, rel)
+    if (!existsSync(dir)) return
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      const r = `${rel}/${e.name}`
+      if (e.isDirectory()) walk(r)
+      else if (/\.(ts|tsx)$/.test(e.name) && !/\.d\.ts$/.test(e.name)) out.push(r)
+    }
+  }
+  for (const d of ['cli', 'hooks', 'mods']) walk(d)
+  return out
+}
+
+test('F1: every read in the plugin goes through the shared reader (no direct readText, readRange, readFile or fs)', () => {
+  // The drivers, and the per-plugin driver extension (FlowKy Pro's removes its own temporary files).
+  const drivers = new Set(['cli/node-io.ts', 'hooks/mod-io.ts', 'mods/io.ts', 'cli/io-extension.ts'])
   const bad = []
-  for (const f of core.files.filter(f => /\.(ts|tsx)$/.test(f) && !f.startsWith('tests'))) {
+  // Every shipped file, not only the core list: mods/config.ts is per-plugin (second safety look).
+  const files = shippedSources()
+  assert.ok(files.includes('mods/config.ts') && files.includes('hooks/baseline.ts'))
+  for (const f of files) {
     if (drivers.has(f)) continue
     const text = readFileSync(join(PLUGIN, f), 'utf8')
     text.split('\n').forEach((line, i) => {

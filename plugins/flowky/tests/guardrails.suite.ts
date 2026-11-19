@@ -131,7 +131,7 @@ const fake: Agent = {
   },
   async say(io, root, session, text) {
     const r = await fakeHook(io, { event: 'UserSaid', sid: session, dir: root, workspace: root, words: text })
-    return { context: r.note, answered: r.handled }
+    return { context: r.note, answered: r.handled, user: r.toast }
   },
 }
 
@@ -492,24 +492,24 @@ for (const agent of AGENTS) {
     const io = gitIo(HEAD, '14', 'src/api/x.ts\npackages/db/y.ts\nREADME.md\n', { '.flowky/index/meta.json': JSON.stringify({ commit: 'b1b2c3d' }) })
     for (const source of ['startup', 'compact']) {
       const r = await agent.start(io, ROOT, 's', source)
-      expect(r.context).toContain("the VS Code extension's project map (.flowky/index) was generated at b1b2c3d, 14 commits before HEAD (aaaaaaa). Changed since then: README.md, packages/, src/.")
+      expect(r.context).toContain("the committed project map of the VS Code extension (.flowky/index) is behind HEAD: generated at b1b2c3d, 14 commits before HEAD (aaaaaaa). Changed since then: README.md, packages/, src/.")
     }
   })
 
   t('silent without git, without an index, or when the index is at HEAD', async () => {
     const none = project(ROOT, { '.flowky/index/meta.json': JSON.stringify({ commit: 'b1b2c3d' }) })
-    expect((await agent.start(none, ROOT, 's')).context ?? '').not.toContain('FlowKy: the VS Code')
+    expect((await agent.start(none, ROOT, 's')).context ?? '').not.toContain('FlowKy: the committed project map')
     const noIndex = gitIo(HEAD, '3', 'src/a.ts')
-    expect((await agent.start(noIndex, ROOT, 's')).context ?? '').not.toContain('FlowKy: the VS Code')
+    expect((await agent.start(noIndex, ROOT, 's')).context ?? '').not.toContain('FlowKy: the committed project map')
     const same = gitIo(HEAD, '0', '', { '.flowky/index/meta.json': JSON.stringify({ commit: HEAD.slice(0, 7) }) })
-    expect((await agent.start(same, ROOT, 's')).context ?? '').not.toContain('FlowKy: the VS Code')
+    expect((await agent.start(same, ROOT, 's')).context ?? '').not.toContain('FlowKy: the committed project map')
   })
 
   t('a hostile commit value is never handed to git', async () => {
     for (const commit of ['--output=pwned', 'HEAD~3', 'abc..def', 'ABCDEF1', 'a1b2c3', '1234567 --all', { x: 1 }]) {
       const io = gitIo(HEAD, '3', 'src/a.ts', { '.flowky/index/meta.json': JSON.stringify({ commit }) })
       const r = await agent.start(io, ROOT, 's')
-      expect(r.context ?? '').not.toContain('FlowKy: the VS Code')
+      expect(r.context ?? '').not.toContain('FlowKy: the committed project map')
       expect(io.runs.some(x => x.argv.some(a => /pwned|HEAD~|\.\.def|--all|ABCDEF/.test(a)))).toBe(false)
     }
   })
@@ -618,6 +618,30 @@ for (const agent of AGENTS) {
     const waitFor = 'FAIL src/a.test.tsx\n  Error: Timed out in waitFor.'
     for (let i = 0; i < 2; i++) await agent.shellFailed(io3, ROOT, 's', 'npx jest', 1, waitFor)
     expect((await agent.shellFailed(io3, ROOT, 's', 'npx jest', 1, waitFor)).context).toContain('3 times')
+  })
+
+  // ---- after the second looks ----
+
+  t('the staleness line is shown to the person once per session, and to Claude at every start', async () => {
+    const io = gitIo(HEAD, '14', 'src/a.ts\n', { '.flowky/index/meta.json': JSON.stringify({ commit: 'b1b2c3d' }) })
+    const first = await agent.start(io, ROOT, 's', 'startup')
+    expect(first.user).toContain('is behind HEAD: generated at b1b2c3d')
+    const again = await agent.start(io, ROOT, 's', 'compact')
+    expect(again.context).toContain('is behind HEAD: generated at b1b2c3d')
+    expect(again.user ?? '').not.toContain('is behind HEAD')
+    expect((await agent.start(io, ROOT, 'other', 'startup')).user).toContain('is behind HEAD')
+  })
+
+  t('HEAD moving during the session is shown to the person too', async () => {
+    const io = gitIo(HEAD, '0', '')
+    io.files[`${ROOT}/.git/HEAD`] = 'ref: refs/heads/main\n'
+    io.files[`${ROOT}/.git/refs/heads/main`] = `${HEAD}\n`
+    await agent.start(io, ROOT, 's')
+    await agent.say(io, ROOT, 's', 'hi')
+    io.files[`${ROOT}/.git/refs/heads/main`] = `${'c'.repeat(40)}\n`
+    const r = await agent.say(io, ROOT, 's', 'hi')
+    expect(r.user).toContain('HEAD moved during this session')
+    expect(r.context).toContain('HEAD moved during this session')
   })
 
   t('a corrupt or hostile state file never blocks and never crashes', async () => {
@@ -737,6 +761,46 @@ test('context hint: with the mods layer active in this session the Stop message 
     const out = (await dispatch(io, 'Stop', { session_id: 's', cwd: ROOT, transcript_path: `${ROOT}/t.jsonl` }, 'test')).output as { systemMessage?: string } | undefined
     expect([mods, typeof out?.systemMessage === 'string']).toEqual([mods, shown])
   }
+})
+
+// ---- after the second looks: units ----
+
+test('stored error lines older than 24 hours are erased on disk, in closed sessions too; the counts stay', async () => {
+  const now = 1_800_000_000_000
+  const old = { v: 1, updatedAt: now - 2 * 3600 * 1000, epoch: 0, saidHeads: [], writes: {}, removed: {}, agents: { main: { '0123456789abcdef': { streak: 2, exit: 1, sig: 's', err: 'postgres://user:secret@host/db refused', epoch: 0, network: false, paused: false, at: now - 2 * 3600 * 1000 } } } }
+  const io = memoryIo({ [`${ROOT}/.flowky/cache/guard/session-closed.json`]: JSON.stringify(old), [`${ROOT}/src/a.ts`]: 'x' }, { env: { CLAUDE_PROJECT_DIR: ROOT }, now })
+  // Within 24 hours: kept.
+  await dispatch(io, 'SessionStart', { session_id: 'new1', cwd: ROOT, source: 'startup' }, 'test')
+  expect(io.files[`${ROOT}/.flowky/cache/guard/session-closed.json`]).toContain('secret')
+  // 23 hours later (25 hours after the failure), the next session start erases it on disk.
+  io.clock.now += 23 * 3600 * 1000
+  await dispatch(io, 'SessionStart', { session_id: 'new2', cwd: ROOT, source: 'startup' }, 'test')
+  const after = io.files[`${ROOT}/.flowky/cache/guard/session-closed.json`]!
+  expect(after).not.toContain('secret')
+  expect(JSON.parse(after).agents.main['0123456789abcdef'].streak).toBe(2)
+  // A failure stored in another session also triggers it.
+  io.files[`${ROOT}/.flowky/cache/guard/session-closed.json`] = JSON.stringify({ ...old, updatedAt: io.clock.now - 26 * 3600 * 1000, agents: { main: { '0123456789abcdef': { ...old.agents.main['0123456789abcdef'], at: io.clock.now - 26 * 3600 * 1000 } } } })
+  await dispatch(io, 'PostToolUseFailure', { session_id: 'new2', cwd: ROOT, tool_name: 'Bash', tool_input: { command: 'npm test' }, error: 'Exit code 1\nError: x' }, 'test')
+  expect(io.files[`${ROOT}/.flowky/cache/guard/session-closed.json`]).not.toContain('secret')
+})
+
+test('a printed exit status above 255 is not a status (a script can shape the last line)', () => {
+  expect(printedExitStatus('npm test; echo $?', 'ok\n10')?.exitCode).toBe(10)
+  expect(printedExitStatus('npm test; echo $?', 'all passed: 1' + '0')?.exitCode).toBeUndefined()
+  expect(printedExitStatus('npm test; echo $?', 'ok\n2560')).toBeUndefined()
+  expect(printedExitStatus('npm test; echo $?', 'ok\n255')?.exitCode).toBe(255)
+})
+
+test('health: the index line says what was read and what was left out, and why', async () => {
+  const io = memoryIo({
+    [`${ROOT}/src/a.ts`]: 'export function realOne() {}\n',
+    [`${ROOT}/src/gen.ts`]: '// @generated\nexport function genOne() {}\n',
+    [`${ROOT}/src/min.js`]: 'x'.repeat(3000) + '\n',
+    [`${ROOT}/src/big.ts`]: 'export function bigOne() {}\n' + 'x'.repeat(1024 * 1024 + 10),
+  }, { env: { CLAUDE_PROJECT_DIR: ROOT } })
+  await dispatch(io, 'SessionStart', { session_id: 'h', cwd: ROOT, source: 'startup' }, 'test')
+  const text = (await dispatch(io, 'health', { cwd: ROOT }, 'test')).text!
+  expect(text).toContain('1 definitions from 1 source files read; left out: 1 with a generated marker, 1 minified, 1 over 1 MB')
 })
 
 // ---- adapter-free units ----

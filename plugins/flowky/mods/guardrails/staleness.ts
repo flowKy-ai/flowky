@@ -101,7 +101,7 @@ export function startLine(facts: { own?: IndexMeta; extension?: Drift }): string
   if (ext) {
     const since = ext.behind !== undefined ? `, ${ext.behind} commit${ext.behind === 1 ? '' : 's'} before HEAD (${ext.head.slice(0, 7)})` : `; HEAD is now ${ext.head.slice(0, 7)}`
     const where = ext.changed.length ? ` Changed since then: ${ext.changed.map(c => inline(c, 80)).join(', ')}.` : ''
-    parts.push(`FlowKy: the VS Code extension's project map (.flowky/index) was generated at ${ext.commit.slice(0, 7)}${since}.${where} Its skill files can be out of date in those folders; the files themselves are the reference.`)
+    parts.push(`FlowKy: the committed project map of the VS Code extension (.flowky/index) is behind HEAD: generated at ${ext.commit.slice(0, 7)}${since}.${where} Its skill files can be out of date in those folders; the files themselves are the reference.`)
   }
   return parts.length ? parts.join(' ') : undefined
 }

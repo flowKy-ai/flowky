@@ -11,7 +11,7 @@
 
 import type { Io } from '../io'
 import { join, readSafe } from '../io'
-import { STATE_DIR, readState, stateDir, updateState } from '../state'
+import { STATE_DIR, readState, stateDir, updateState, writeState } from '../state'
 
 export const GUARD_DIR = 'guard'
 export const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000
@@ -44,6 +44,8 @@ export type GuardSession = {
   head?: string
   /** HEAD values already reported during the session. */
   saidHeads: string[]
+  /** Digests of the session-start lines already shown to the person (once per session; Claude gets them at every start). */
+  toldStart: string[]
   /** Duplicate-guard pauses already made: fingerprint -> time. */
   writes: Record<string, number>
   /** Names whose definition this session removed from a file: name -> time (a move or a rename in progress). */
@@ -53,7 +55,7 @@ export type GuardSession = {
 }
 
 export function emptySession(now: number): GuardSession {
-  return { v: 1, updatedAt: now, epoch: 0, saidHeads: [], writes: Object.create(null), removed: Object.create(null), agents: Object.create(null) }
+  return { v: 1, updatedAt: now, epoch: 0, saidHeads: [], toldStart: [], writes: Object.create(null), removed: Object.create(null), agents: Object.create(null) }
 }
 
 const KEY = /^[\w.:@/-]{1,200}$/
@@ -86,6 +88,7 @@ export function sanitizeSession(raw: unknown, now: number): GuardSession {
   s.epoch = Number.isInteger(epoch) && epoch >= 0 && epoch < 1e9 ? epoch : 0
   if (typeof r.head === 'string' && /^[0-9a-f]{40}$/.test(r.head)) s.head = r.head
   if (Array.isArray(r.saidHeads)) s.saidHeads = r.saidHeads.filter((h): h is string => typeof h === 'string' && /^[0-9a-f]{40}$/.test(h)).slice(-10)
+  if (Array.isArray(r.toldStart)) s.toldStart = r.toldStart.filter((h): h is string => typeof h === 'string' && /^[0-9a-f]{16}$/.test(h)).slice(-10)
   const rec = (v: unknown, max: number, keyOk: (k: string) => boolean): Record<string, number> => {
     const out: Record<string, number> = Object.create(null)
     if (!v || typeof v !== 'object' || Array.isArray(v)) return out
@@ -208,4 +211,38 @@ export async function pruneGuardSessions(io: Io, root: string): Promise<void> {
   for (const [i, e] of files.entries()) {
     if (i >= MAX_SESSIONS || now - e.mtimeMs > SESSION_TTL_MS) await io.removeInside(root, join(dir, e.name)).catch(() => undefined)
   }
+}
+
+/**
+ * Erases, in every session file of the project (closed sessions included), each stored error line
+ * older than 24 hours; the counters stay until the file goes (7 days). Run by the hooks that store
+ * error lines or start a session (the README's promise; second behaviour look, N2). Bounded: the
+ * guard folder holds at most 30 session files of at most 64 KB.
+ */
+export async function scrubOldErrorLines(io: Io, root: string): Promise<number> {
+  const dir = join(root, STATE_DIR, GUARD_DIR)
+  const entries = await io.list(dir).catch(() => [])
+  const now = await io.now()
+  let erased = 0
+  for (const e of entries.filter(x => x.kind === 'file' && /^session-[A-Za-z0-9_-]{1,64}\.json$/.test(x.name)).slice(0, MAX_SESSIONS * 2)) {
+    const name = `${GUARD_DIR}/${e.name.slice(0, -'.json'.length)}`
+    const raw = await readState<Record<string, unknown>>(io, root, name, {})
+    const agents = raw.agents
+    if (!agents || typeof agents !== 'object') continue
+    let changed = 0
+    for (const cmds of Object.values(agents as Record<string, unknown>)) {
+      if (!cmds || typeof cmds !== 'object') continue
+      for (const c of Object.values(cmds as Record<string, Record<string, unknown>>)) {
+        if (c && typeof c === 'object' && typeof c.err === 'string' && c.err !== '' && !(typeof c.at === 'number' && now - c.at <= ERROR_TTL_MS)) {
+          c.err = ''
+          changed++
+        }
+      }
+    }
+    if (changed) {
+      await writeState(io, root, name, raw)
+      erased += changed
+    }
+  }
+  return erased
 }

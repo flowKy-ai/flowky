@@ -25,10 +25,10 @@ import { findOldGuard, loadGuardrails, oldGuardAdvice } from '../mods/guardrails
 import { duplicateDecision, findCollisions, pauseKey } from '../mods/guardrails/dup-guard'
 import { beforeShell, commandFingerprint, printedExitStatus, recordFailure, recordSuccess, resetStreaks } from '../mods/guardrails/loop-breaker'
 import { INDEX_BUDGET_MS, INDEX_MAX_FILES, buildIndex, loadIndex, readMeta, updateIndexedFile } from '../mods/guardrails/symbol-index'
-import { pruneGuardSessions, readSession, withSession } from '../mods/guardrails/session-state'
+import { pruneGuardSessions, readSession, scrubOldErrorLines, withSession } from '../mods/guardrails/session-state'
 import { driftSince, extensionCommit, headCommit, headFromFiles, movedLine, startLine } from '../mods/guardrails/staleness'
 import { doctorReport, gatherDoctorInputs, runDoctor, summaryLine } from '../mods/guardrails/config-doctor'
-import { clean, relativeTo } from '../mods/guardrails/text'
+import { clean, digest, relativeTo } from '../mods/guardrails/text'
 import { classifyPath } from '../mods/guardrails/symbols'
 import { withLock } from '../mods/state'
 import { PLUGIN } from './identity'
@@ -87,6 +87,7 @@ export async function guardrailsAtStart(io: Io, ev: Extract<AgentEvent, { kind: 
     const cfg = await loadGuardrails(io, root)
     const old = await findOldGuard(io, root)
     await pruneGuardSessions(io, root).catch(() => undefined)
+    await scrubOldErrorLines(io, root).catch(() => undefined)
     const head = (await left()) > 300 ? await headCommit(io, root, Math.min(2000, (await left()) - 200)) : undefined
     let own
     if (cfg.duplicateGuard.mode !== 'off' && !old.length && (await left()) > 1000) {
@@ -102,7 +103,18 @@ export async function guardrailsAtStart(io: Io, ev: Extract<AgentEvent, { kind: 
       const extCommit = head ? await extensionCommit(io, root) : undefined
       const extension = extCommit && head && (await left()) > 400 ? await driftSince(io, root, extCommit, head, Math.min(4000, (await left()) - 300)) : undefined
       const line = startLine({ own, extension })
-      if (line) parts.push({ contextForAgent: line })
+      if (line) {
+        // Claude gets the line at every session start (compact included); the person sees it once per
+        // session (systemMessage: "Warning message shown to the user").
+        const key = digest(line)
+        // Not recorded (FlowKy Pro before the folder is trusted): it is shown again at the next start.
+        const { result: firstTime } = await withSession(io, root, ev.session, s => {
+          if (s.toldStart.includes(key)) return false
+          s.toldStart.push(key)
+          return true
+        })
+        parts.push({ contextForAgent: line, ...(firstTime ? { messageForUser: line } : {}) })
+      }
     }
     if (cfg.configDoctor.sessionSummary && ev.source === 'startup' && (await left()) > 1500) {
       // Display-only and unstamped (it may be written before the folder is trusted): a forged file
@@ -183,7 +195,7 @@ export async function guardrailsOnEvent(io: Io, ev: AgentEvent): Promise<Decisio
       const { saved } = await withSession(io, root, ev.session, x => {
         x.saidHeads.push(now)
       })
-      return saved ? { contextForAgent: movedLine(from, now) } : NOTHING
+      return saved ? { contextForAgent: movedLine(from, now), messageForUser: movedLine(from, now) } : NOTHING
     }
     if (ev.kind === 'stop') return NOTHING
     const tool = ev.tool
@@ -209,6 +221,7 @@ export async function guardrailsOnEvent(io: Io, ev: AgentEvent): Promise<Decisio
         const printed = printedExitStatus(tool.command, ev.output)
         if (printed && printed.exitCode !== 0) {
           const { result } = await withSession(io, root, ev.session, (s, now) => recordFailure(s, now, { ...facts, output: printed.output, exitCode: printed.exitCode }, cfg))
+          await scrubOldErrorLines(io, root).catch(() => undefined)
           return result
         }
         // A success ends that command's count; nothing to write when there is none.
@@ -219,6 +232,8 @@ export async function guardrailsOnEvent(io: Io, ev: AgentEvent): Promise<Decisio
         return NOTHING
       }
       const { result } = await withSession(io, root, ev.session, (s, now) => recordFailure(s, now, { ...facts, output: ev.error, exitCode: ev.exitCode, interrupted: ev.interrupted }, cfg))
+      // A hook that stores an error line also erases the ones older than 24 hours, in every session file.
+      await scrubOldErrorLines(io, root).catch(() => undefined)
       return result
     }
     if ((tool.kind === 'write' || tool.kind === 'edit' || tool.kind === 'notebook') && ev.ok) {
