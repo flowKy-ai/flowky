@@ -16,40 +16,47 @@ FlowKy gives it memory, guardrails, and a map that tells you when it has gone st
 
 ## What it does
 
-Works alongside Claude Code, Cursor, Copilot, Gemini CLI, Windsurf and Cline. It does not replace them.
+Built for Claude Code. The project map and the generated configuration also work with Cursor, Copilot and other agents that read files in your repository. FlowKy does not replace your agent.
+
+**In the VS Code extension today**
+
+| | |
+|---|---|
+| **Gives your agent a map** | Your directory tree, symbols and import graph live in a skill your agent opens on demand. Sessions that never need them pay zero tokens. |
+| **Writes the configuration** | One command writes `CLAUDE.md`, path-scoped rules and the project-map skill from your real codebase. |
+| **Your keys, your machine** | OpenAI, Anthropic, Google or any OpenAI-compatible endpoint. Keys stay in your editor, and model calls go straight to your provider, not through us. |
+
+**Coming (not in the published extension yet)**
 
 | | |
 |---|---|
 | **Stops duplicate code** | Every function and class in your project is indexed. When your agent starts writing one that exists, it gets the file and the line — before the write lands. |
 | **Breaks the retry loop** | Third time the same command has failed, FlowKy interrupts and surfaces the error the agent kept skipping past. |
 | **Keeps the map honest** | The project map records the commit it was built from and reports how far it has drifted, so a stale map is never mistaken for a current one. |
-| **Costs nothing until used** | Your directory tree, symbols and import graph live in a skill your agent opens on demand. Sessions that never need them pay zero tokens. |
 | **Audits your config** | Finds duplicated rules, dead weight, and instructions that silently stop applying after a compaction. |
-| **Your keys, your machine** | OpenAI, Anthropic, Google or any OpenAI-compatible endpoint. Keys stay in your editor and no inference request passes through us. |
 
 ## Install
 
 ```bash
 # VS Code
 code --install-extension FlowKy.flowky
-
-# Or generate the config directly in any repo
-npx flowky init
 ```
 
-That writes:
+Then open the Command Palette and run **Generate Claude Configuration**. A command-line installer is not published yet; until it is, the extension is the only supported way to install FlowKy.
+
+The command writes:
 
 ```
 your-project/
 ├── CLAUDE.md                        # gotchas only, kept under 200 lines
 ├── .claude/
 │   ├── rules/                       # path-scoped conventions
-│   ├── skills/project-map/          # tree, symbols, imports — loaded on demand
-│   └── settings.json                # hooks wiring
+│   └── skills/project-map/          # tree, symbols, imports — loaded on demand
 └── .flowky/
-    ├── index/symbols.tsv            # what the duplicate guard queries
-    └── hooks/flowky-guard.mjs       # runs on macOS, Linux and Windows
+    └── index/symbols.tsv            # the symbol index the map is built from
 ```
+
+> **If your project already has a `.claude/settings.json`, back it up first.** The published version can leave that file invalid when it adds its own entry. The fix, and the hook that powers the guards listed under "Coming", ship with the next release.
 
 ## The perfect flow
 
@@ -61,7 +68,9 @@ Cursor, Copilot and Codex) → give it a map → audit → hand a finding to the
 agent → sync to your project page. The written version lives at
 [flowky.ai/docs/the-perfect-flow](https://flowky.ai/en/docs/the-perfect-flow).
 
-## How the guard works
+## How the guard will work
+
+*Status: not in the published extension yet (see "Coming" above).*
 
 The guard is a hook, not a prompt. That distinction is the whole product: instructions in a context file are advisory and drift as the window fills, while a hook is checked on every single write regardless of what the model decided.
 
@@ -74,7 +83,7 @@ FlowKy: this symbol already exists in this codebase.
 Import and reuse the existing definition, or extend it.
 ```
 
-It asks rather than blocks. Overloads and re-exports are legitimate, and a hard block produces false positives that get the hook switched off within a week.
+It asks once and never blocks. Overloads and re-exports are legitimate, and a hard block produces false positives that get the hook switched off within a week.
 
 ## FlowKy Bot
 
@@ -122,3 +131,8 @@ Found a security issue? Do not open an issue — see [SECURITY.md](./SECURITY.md
 ## Licence
 
 [MIT](./LICENSE) for everything in this repository, including the starter. The FlowKy extension and web application are separately licensed.
+
+## Trademarks
+
+FlowKy is an independent product. It is not affiliated with, endorsed or sponsored by Anthropic, or by the makers of the other tools named in this repository. Claude and Claude Code are trademarks of Anthropic, PBC; all other names are trademarks of their respective owners.
+
