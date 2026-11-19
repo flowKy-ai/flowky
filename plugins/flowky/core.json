@@ -21,7 +21,7 @@
     "skills/map/SKILL.md",
     "skills/project-map/SKILL.md",
     "scripts/build.mjs",
-    "scripts/claude.mjs",
+    "scripts/host.mjs",
     "scripts/icon.mjs",
     "scripts/typecheck.mjs",
     "tsconfig.json",

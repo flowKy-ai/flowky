@@ -11,9 +11,9 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "typecheck": "node scripts/typecheck.mjs",
-    "test": "node scripts/build.mjs --check && node --test tests-node/ && node scripts/claude.mjs plugin test .",
+    "test": "node scripts/build.mjs --check && node --test tests-node/ && node scripts/host.mjs plugin test .",
     "test:node": "node scripts/build.mjs --check && node --test tests-node/",
-    "validate": "node scripts/claude.mjs plugin validate ."
+    "validate": "node scripts/host.mjs plugin validate ."
   },
   "devDependencies": {
     "@types/node": "^20.19.43",

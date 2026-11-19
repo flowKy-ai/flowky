@@ -1,4 +1,5 @@
-// Runs the `claude` CLI that has plugin and mod support: CLAUDE_BIN if set,
+// Runs the Claude Code CLI that has plugin and mod support (named host.mjs so that no file name
+// carries the vendor's name): CLAUDE_BIN if set,
 // else the binary bundled in the VS Code extension (newest), else `claude` on PATH.
 import { spawnSync } from 'node:child_process'
 import { existsSync, readdirSync } from 'node:fs'

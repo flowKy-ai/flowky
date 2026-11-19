@@ -155,7 +155,7 @@ npm run typecheck    # needs the mods API types, see scripts/typecheck.mjs
 npm run validate     # claude plugin validate .
 ```
 
-`scripts/claude.mjs` finds a Claude Code binary with mod support (`CLAUDE_BIN`, else the one inside
+`scripts/host.mjs` finds a Claude Code binary with mod support (`CLAUDE_BIN`, else the one inside
 the VS Code extension, else `claude` on `PATH`).
 
 ## Licence
