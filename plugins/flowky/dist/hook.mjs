@@ -3212,19 +3212,20 @@ function sanitizePath(env, cwd) {
     }).join(delimiter);
   }
 }
-async function checkedTarget(root, path) {
+async function checkedTarget(root, path, dirMode) {
+  const made = dirMode === void 0 ? {} : { mode: dirMode };
   const base = resolve(root);
   const target = resolve(path);
   const rel = relative(base, target);
   if (!rel || rel.startsWith("..") || isAbsolute(rel)) throw new Error(`refused: ${path} is outside ${root}`);
   const baseSt = await fs.lstat(base).catch(() => void 0);
-  if (!baseSt) await fs.mkdir(base, { recursive: true });
+  if (!baseSt) await fs.mkdir(base, { recursive: true, ...made });
   else if (!baseSt.isDirectory() && !baseSt.isSymbolicLink()) throw new Error(`refused: ${root} is not a folder`);
   let at = base;
   for (const part of rel.split(sep).slice(0, -1)) {
     at = pathJoin(at, part);
     const st = await fs.lstat(at).catch(() => void 0);
-    if (!st) await fs.mkdir(at);
+    if (!st) await fs.mkdir(at, made);
     else if (st.isSymbolicLink() || !st.isDirectory()) throw new Error(`refused: ${at} is a link or not a folder`);
   }
   const existing = await fs.lstat(target).catch(() => void 0);
@@ -3378,10 +3379,18 @@ function nodeIo() {
     env(name) {
       return process.env[name];
     },
-    async writeInside(root, path, text) {
-      const target = await checkedTarget(root, path);
+    async writeInside(root, path, text, opts) {
+      const target = await checkedTarget(root, path, opts?.dirMode);
       const tmp = tmpName(target);
-      await fs.writeFile(tmp, text, { encoding: "utf8", flag: "wx" });
+      await fs.writeFile(tmp, text, { encoding: "utf8", flag: "wx", ...opts?.mode === void 0 ? {} : { mode: opts.mode } });
+      if (opts?.mode !== void 0 && !WIN) {
+        try {
+          await fs.chmod(tmp, opts.mode);
+        } catch (err) {
+          await fs.rm(tmp, { force: true });
+          throw err;
+        }
+      }
       await renameInto(tmp, target);
     },
     async copyInside(root, from, to) {

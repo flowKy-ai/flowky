@@ -54,7 +54,8 @@
     "tests-node/safety.test.mjs",
     "tests-node/skills.test.mjs",
     "tests-node/suites.test.mjs",
-    "tests-node/tmp.mjs"
+    "tests-node/tmp.mjs",
+    "tests-node/write-mode.test.mjs"
   ],
   "interface": {
     "hooks/baseline.ts": "the plugin's dispatcher: export dispatch(io, event, input, runtime, wait?, args?)",

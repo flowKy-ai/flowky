@@ -3,7 +3,10 @@
 
 import { expect, test } from 'claude-code/testing'
 
+import type { EngineInterface } from 'claude-code'
+
 import { dispatch } from '../hooks/baseline'
+import { modIo } from '../hooks/mod-io'
 import { globToRegExp, matchGlob } from '../mods/glob'
 import { isIgnored, parseGitignore } from '../mods/gitignore'
 import { LEGACY_MAP_PATH, MAP_PATH, scanTree } from '../mods/project-map'
@@ -77,4 +80,25 @@ test('decision 10: a state write through a symbolic link is refused, and never f
   const r = await dispatch(io, 'SessionStart', { session_id: 's', cwd: ROOT }, 't')
   expect(r.exitCode).toBe(0)
   expect(Object.keys(io.files).filter(f => f.includes('/.flowky/') || f.includes('/.claude/'))).toEqual([])
+})
+
+test('safe writer permissions: the mods driver, which cannot set them, refuses such a write instead of making it wider', async () => {
+  const writes: string[] = []
+  const fake = { fs: { stat: async () => undefined, write: async (p: string) => void writes.push(p) } } as unknown as EngineInterface
+  const io = modIo(fake, 'linux', undefined, '/home/u/.flowky')
+  let refused = ''
+  await io.writeInside!('/home/u/.flowky', '/home/u/.flowky/x.json', 'x', { mode: 0o600 }).catch((e: unknown) => (refused = String(e)))
+  expect(refused).toMatch(/permissions/)
+  await io.writeInside!('/home/u/.flowky', '/home/u/.flowky/y.json', 'y', { dirMode: 0o700 }).catch((e: unknown) => (refused = String(e)))
+  expect(writes).toEqual([])
+  // Without the option, the same driver writes as before.
+  await io.writeInside!('/home/u/.flowky', '/home/u/.flowky/z.json', 'z')
+  expect(writes).toEqual(['/home/u/.flowky/z.json'])
+})
+
+test('safe writer permissions: the test driver records the mode a write asked for, and only then', async () => {
+  const io = memoryIo()
+  await io.writeInside!(ROOT, `${ROOT}/a.json`, 'a', { mode: 0o600 })
+  await io.writeInside!(ROOT, `${ROOT}/b.json`, 'b')
+  expect(io.modes).toEqual({ [`${ROOT}/a.json`]: 0o600 })
 })
