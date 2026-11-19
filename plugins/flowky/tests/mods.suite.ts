@@ -116,3 +116,20 @@ test('review 2 (free): a repository config alone cannot switch on handoff auto-s
   await clock.advance(50)
   expect(submitted).toBe(1)
 })
+
+test('the guardrails commands answer in the mods layer with no model turn: config-doctor diagnoses, retry resets', async ($, on) => {
+  const files: Record<string, string> = {
+    [`${ROOT}/CLAUDE.md`]: '# P\n\n- You are a senior engineer.\n',
+    [`${ROOT}/.flowky/cache/guard/session-sess-1.json`]: JSON.stringify({ v: 1, updatedAt: 1_800_000_000_000, epoch: 0, saidHeads: [], writes: {}, removed: {}, agents: { main: { '0123456789abcdef': { streak: 3, exit: 1, sig: 's', err: 'e', epoch: 0, network: false, paused: false, at: 1_800_000_000_000 } } } }),
+  }
+  world(on, files)
+  await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true })
+  const before = files[`${ROOT}/CLAUDE.md`]
+  const doctor = await $.command.run({ command: 'flowky', args: 'config-doctor' } as never)
+  expect(doctor.text).toContain('WARNING persona-block  CLAUDE.md:3')
+  expect(doctor.text).toContain('Nothing was changed.')
+  expect(files[`${ROOT}/CLAUDE.md`]).toBe(before)
+  const retry = await $.command.run({ command: 'flowky', args: 'retry' } as never)
+  expect(retry.text).toContain('loop breaker reset for this session (1 failure count cleared)')
+  expect(JSON.parse(files[`${ROOT}/.flowky/cache/guard/session-sess-1.json`]!).agents.main).toEqual({})
+})
