@@ -84,6 +84,7 @@ test('no computed require or import, no child process outside the driver, and io
     if (/\.run\s*\(/.test(text) && !RUN_ALLOWED.has(f)) hits.push(`${f}: io.run outside the git runner`)
   }
   assert.deepEqual(hits, [])
-  const dist = readFileSync(join(ROOT, 'dist', 'hook.mjs'), 'utf8')
-  assert.doesNotMatch(dist, /\bcreateRequire\b/)
+  // The bundle carries createRequire only when an allowed file (FlowKy Pro's) put it there.
+  const allowedPresent = [...REQUIRE_ALLOWED].some(f => existsSync(join(ROOT, f)))
+  if (!allowedPresent) assert.doesNotMatch(readFileSync(join(ROOT, 'dist', 'hook.mjs'), 'utf8'), /\bcreateRequire\b/)
 })
