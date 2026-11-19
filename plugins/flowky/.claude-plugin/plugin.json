@@ -1,0 +1,10 @@
+{
+  "name": "flowky",
+  "version": "0.3.0",
+  "description": "FlowKy for Claude Code: a project map written at session start, context-size hints with a one-command handoff summary, and a health check. No network request, no model call. FlowKy is an independent product. It is not affiliated with, endorsed or sponsored by Anthropic, or by the makers of the other tools named here. Claude and Claude Code are trademarks of Anthropic, PBC.",
+  "author": { "name": "FlowKy" },
+  "homepage": "https://github.com/flowKy-ai/flowky",
+  "repository": "https://github.com/flowKy-ai/flowky",
+  "license": "MIT",
+  "keywords": ["mod", "context", "tokens", "project-map"]
+}

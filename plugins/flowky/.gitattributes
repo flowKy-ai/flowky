@@ -1,0 +1,4 @@
+# One line ending everywhere: dist/hook.mjs is compared byte for byte with a fresh
+# build (npm test), and FlowKy Pro checks the core files by their hashes.
+* text=auto eol=lf
+*.png binary

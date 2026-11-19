@@ -1,0 +1,5 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": { "types": ["node"], "lib": ["es2023"] },
+  "include": ["cli", "mods", "hooks/baseline.ts", "hooks/session-start.ts", "hooks/context-guard.ts", "hooks/health.ts", "hooks/health-common.ts", "hooks/identity.ts"]
+}

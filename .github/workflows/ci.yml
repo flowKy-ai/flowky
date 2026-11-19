@@ -79,3 +79,26 @@ jobs:
             if [ ! -e "$clean" ]; then echo "broken link: $clean"; fail=1; fi
           done < <(grep -rhoE '\]\(\./[^)]+\)' --include='*.md' . | sed -E 's/^\]\(\.\///; s/\)$//')
           exit $fail
+
+  plugin:
+    # The FlowKy plugin for Claude Code and the core FlowKy Pro is built from. CI has no Claude
+    # Code binary, so `claude plugin test` and `claude plugin validate` run locally before a
+    # release (npm test); this job runs everything that needs only Node: the stale-build check of
+    # dist/hook.mjs and the end-to-end Node tests, including the network-free bundle test.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: plugins/flowky
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install the locked development tools
+        run: npm ci
+      - name: Build check and Node tests
+        run: npm run test:node

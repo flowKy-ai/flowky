@@ -1,0 +1,12 @@
+{
+  "name": "flowky",
+  "owner": { "name": "FlowKy" },
+  "description": "FlowKy for Claude Code: the FlowKy plugin catalogue. FlowKy is an independent product. It is not affiliated with, endorsed or sponsored by Anthropic, or by the makers of the other tools named here. Claude and Claude Code are trademarks of Anthropic, PBC.",
+  "plugins": [
+    {
+      "name": "flowky",
+      "source": "./plugins/flowky",
+      "description": "Project map at session start, context-size hints with a handoff summary command, and a health check. No network request, no model call."
+    }
+  ]
+}

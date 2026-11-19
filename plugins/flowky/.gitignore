@@ -1,0 +1,6 @@
+node_modules/
+.claude-plugin/types/
+.flowky/cache/
+.claude/project-map.md
+*.log
+.DS_Store
