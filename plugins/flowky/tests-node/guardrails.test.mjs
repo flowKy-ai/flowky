@@ -63,6 +63,7 @@ function project({ repo = true } = {}) {
 const start = (dir, session = 's1', source = 'startup') => hook('SessionStart', { session_id: session, cwd: dir, source }, dir)
 const native = (dir, rel) => join(dir, ...rel.split('/'))
 const DUP = 'export function safeRedirectPath(u: string) {\n  return u\n}\n'
+const OLD_HOOK_SETTINGS = JSON.stringify({ hooks: { PreToolUse: [{ matcher: 'Write', hooks: [{ type: 'command', command: 'node "${CLAUDE_PROJECT_DIR}/.flowky/hooks/flowky-guard.mjs"' }] }] } })
 
 test('duplicate guard: paused once with file and line, the identical write then passes (native path separators)', () => {
   const dir = project()
@@ -200,7 +201,9 @@ test('config doctor: the command prints a short report with what to change and w
   const dir = project({ repo: false })
   writeFileSync(join(dir, 'CLAUDE.md'), '# P\n\n- You are a senior engineer.\n- See src/missing/x.ts first.\n')
   mkdirSync(join(dir, '.claude'))
-  writeFileSync(join(dir, '.claude', 'settings.json'), JSON.stringify({ hooks: { PreToolUse: [{ matcher: 'Write', hooks: [{ type: 'command', command: 'node "${CLAUDE_PROJECT_DIR}/.flowky/hooks/flowky-guard.mjs"' }] }] } }))
+  writeFileSync(join(dir, '.claude', 'settings.json'), OLD_HOOK_SETTINGS)
+  mkdirSync(join(dir, '.flowky', 'hooks'), { recursive: true })
+  writeFileSync(join(dir, '.flowky', 'hooks', 'flowky-guard.mjs'), '// the extension hook\n')
   const listing = () => JSON.stringify(readdirSync(dir, { recursive: true }).sort())
   const before = listing()
   const r = spawnSync(process.execPath, [HOOK, 'config-doctor'], { cwd: dir, input: '', encoding: 'utf8', env: { ...process.env, CLAUDE_PROJECT_DIR: dir } })
@@ -216,6 +219,56 @@ test('config doctor: the command prints a short report with what to change and w
   const health = spawnSync(process.execPath, [HOOK, 'health'], { cwd: dir, input: '', encoding: 'utf8', env: { ...process.env, CLAUDE_PROJECT_DIR: dir } })
   assert.match(health.stdout, /duplicate guard: ON, mode pause-once \(QUIET/)
   assert.match(health.stdout, /delete each hook entry whose command contains "flowky-guard\.mjs"/)
+})
+
+/** A project whose settings wire the extension's old hook: with its script present, missing, or a link in its place. */
+function oldHookProject(script) {
+  const dir = project({ repo: false })
+  mkdirSync(join(dir, '.claude'))
+  writeFileSync(join(dir, '.claude', 'settings.json'), OLD_HOOK_SETTINGS)
+  if (script === 'present') {
+    mkdirSync(join(dir, '.flowky', 'hooks'), { recursive: true })
+    writeFileSync(join(dir, '.flowky', 'hooks', 'flowky-guard.mjs'), '// the extension hook\n')
+  } else if (script === 'link') {
+    const outside = tempDir('flowky-guard-outside-')
+    writeFileSync(join(outside, 'flowky-guard.mjs'), '// somewhere else\n')
+    mkdirSync(join(dir, '.flowky'), { recursive: true })
+    try {
+      // A file link where the platform allows it (Linux, macOS).
+      mkdirSync(join(dir, '.flowky', 'hooks'))
+      symlinkSync(join(outside, 'flowky-guard.mjs'), join(dir, '.flowky', 'hooks', 'flowky-guard.mjs'), 'file')
+    } catch {
+      // Windows without the right to make file links: the folder becomes a junction instead.
+      rmSync(join(dir, '.flowky', 'hooks'), { recursive: true, force: true })
+      symlinkSync(outside, join(dir, '.flowky', 'hooks'), 'junction')
+    }
+  }
+  return dir
+}
+
+const writeDup = (dir) => hook('PreToolUse', { session_id: 's1', cwd: dir, tool_name: 'Write', tool_input: { file_path: native(dir, 'src/z.ts'), content: DUP } }, dir)
+
+test('old hook wired with its script: the plugin stays quiet (one guard, the old one)', () => {
+  const dir = oldHookProject('present')
+  start(dir)
+  assert.deepEqual(writeDup(dir), {})
+})
+
+test('old hook wired but its script missing: no guard would run, so the plugin\'s guardrails answer', () => {
+  const dir = oldHookProject('missing')
+  start(dir)
+  assert.ok(existsSync(join(dir, '.flowky', 'cache', 'index', 'symbols.tsv')), 'the index is built')
+  const r = writeDup(dir)
+  assert.equal(r.hookSpecificOutput?.permissionDecision, 'deny')
+  assert.match(r.hookSpecificOutput.permissionDecisionReason, /src\/lib\/safe-redirect\.ts:3/)
+  const health = spawnSync(process.execPath, [HOOK, 'health'], { cwd: dir, input: '', encoding: 'utf8', env: { ...process.env, CLAUDE_PROJECT_DIR: dir } })
+  assert.doesNotMatch(health.stdout, /QUIET/)
+})
+
+test('a link in place of the old hook\'s script counts as no script', () => {
+  const dir = oldHookProject('link')
+  start(dir)
+  assert.equal(writeDup(dir).hookSpecificOutput?.permissionDecision, 'deny')
 })
 
 test('fail open: garbage stdin, a corrupt state file, a hostile index and a linked state folder never block', () => {
