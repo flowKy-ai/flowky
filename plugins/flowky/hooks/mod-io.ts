@@ -25,7 +25,9 @@ export function modIo($: EngineInterface, platform: Io['platform'], transcriptPa
       const st = await $.fs.stat(path).catch(() => undefined)
       return Boolean(st?.isLink)
     },
-    async writeInside(root, path, text) {
+    async writeInside(root, path, text, opts) {
+      // The mods API cannot set file permissions: a write that asks for them is refused, never made wider.
+      if (opts?.mode !== undefined || opts?.dirMode !== undefined) throw new Error(`refused: ${path} needs file permissions this driver cannot set`)
       // The mods API has no lstat-free rename: check every step for a link, then write.
       const r = posix(root)
       const p = posix(path)

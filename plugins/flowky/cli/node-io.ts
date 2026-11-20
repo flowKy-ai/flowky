@@ -16,7 +16,7 @@ import { constants as fsc, promises as fs } from 'node:fs'
 import { homedir } from 'node:os'
 import { delimiter, dirname, isAbsolute, join as pathJoin, relative, resolve, sep } from 'node:path'
 
-import type { Entry, Io, ReadOptions, RunOptions, RunResult, Stat } from '../mods/io'
+import type { Entry, Io, ReadOptions, RunOptions, RunResult, Stat, WriteOptions } from '../mods/io'
 import { HOME_DIR_NAME } from '../mods/paths'
 
 function kindOf(s: { isFile(): boolean; isDirectory(): boolean }): Entry['kind'] {
@@ -78,21 +78,22 @@ export function sanitizePath(env: NodeJS.ProcessEnv, cwd: string | undefined): v
   }
 }
 
-/** Checks that `path` may be written under `root`; creates the missing folders. Returns the absolute target. */
-async function checkedTarget(root: string, path: string): Promise<string> {
+/** Checks that `path` may be written under `root`; creates the missing folders (with `dirMode` when given). Returns the absolute target. */
+async function checkedTarget(root: string, path: string, dirMode?: number): Promise<string> {
+  const made = dirMode === undefined ? {} : { mode: dirMode }
   const base = resolve(root)
   const target = resolve(path)
   const rel = relative(base, target)
   if (!rel || rel.startsWith('..') || isAbsolute(rel)) throw new Error(`refused: ${path} is outside ${root}`)
   const baseSt = await fs.lstat(base).catch(() => undefined)
-  if (!baseSt) await fs.mkdir(base, { recursive: true })
+  if (!baseSt) await fs.mkdir(base, { recursive: true, ...made })
   else if (!baseSt.isDirectory() && !baseSt.isSymbolicLink()) throw new Error(`refused: ${root} is not a folder`)
   // No symbolic link (or junction) on the way: each folder from the root down, then the file itself.
   let at = base
   for (const part of rel.split(sep).slice(0, -1)) {
     at = pathJoin(at, part)
     const st = await fs.lstat(at).catch(() => undefined)
-    if (!st) await fs.mkdir(at)
+    if (!st) await fs.mkdir(at, made)
     else if (st.isSymbolicLink() || !st.isDirectory()) throw new Error(`refused: ${at} is a link or not a folder`)
   }
   const existing = await fs.lstat(target).catch(() => undefined)
@@ -260,10 +261,20 @@ export function nodeIo(): Io {
     env(name) {
       return process.env[name]
     },
-    async writeInside(root, path, text) {
-      const target = await checkedTarget(root, path)
+    async writeInside(root, path, text, opts?: WriteOptions) {
+      const target = await checkedTarget(root, path, opts?.dirMode)
       const tmp = tmpName(target)
-      await fs.writeFile(tmp, text, { encoding: 'utf8', flag: 'wx' })
+      // With a mode, the temporary file is created with it (never readable more widely, even for a
+      // moment) and set exactly, as the umask may have removed bits; the rename keeps it.
+      await fs.writeFile(tmp, text, { encoding: 'utf8', flag: 'wx', ...(opts?.mode === undefined ? {} : { mode: opts.mode }) })
+      if (opts?.mode !== undefined && !WIN) {
+        try {
+          await fs.chmod(tmp, opts.mode)
+        } catch (err) {
+          await fs.rm(tmp, { force: true })
+          throw err
+        }
+      }
       await renameInto(tmp, target)
     },
     async copyInside(root, from, to) {

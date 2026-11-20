@@ -13,6 +13,8 @@ export type MemoryIo = Io & {
   links: Set<string>
   /** Modification times by path (default: the clock). */
   mtimes: Record<string, number>
+  /** The permission bits a write asked for, by path (writeInside's `mode`). */
+  modes: Record<string, number>
 }
 
 export function memoryIo(
@@ -24,18 +26,22 @@ export function memoryIo(
   const runs: MemoryIo['runs'] = []
   const links = new Set<string>()
   const mtimes: Record<string, number> = {}
+  const modes: Record<string, number> = {}
   const io: MemoryIo = {
     files,
     clock,
     runs,
     links,
     mtimes,
-    async writeInside(root, path, text) {
+    modes,
+    async writeInside(root, path, text, opts) {
       const r = norm(root)
       const p = norm(path)
       if (!p.startsWith(r + '/') || p.split('/').includes('..')) throw new Error(`refused: ${path} is outside`)
       for (const l of links) if (p === l || p.startsWith(l + '/')) throw new Error(`refused: ${l} is a link`)
       files[p] = text
+      if (opts?.mode !== undefined) modes[p] = opts.mode
+      else delete modes[p]
     },
     async copyInside(root, from, to) {
       const src = files[norm(from)]

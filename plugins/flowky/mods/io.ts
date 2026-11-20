@@ -41,6 +41,16 @@ export type RunOptions = {
  */
 export type ReadOptions = { maxBytes: number; offset?: number; partial?: boolean; root?: string }
 
+/**
+ * Optional permissions for writeInside, for a file only its owner may read (for example `0o600`).
+ * `mode`: the written file's permission bits, exactly. `dirMode`: the bits of the folders the writer
+ * creates for it (existing folders are left as they are). POSIX only: on Windows the file keeps the
+ * access list it inherits from its folder (the user profile's, for a file under the user's folder).
+ * A driver that cannot apply them refuses the write rather than write the file more widely readable.
+ * The plugin's own state files do not use them.
+ */
+export type WriteOptions = { mode?: number; dirMode?: number }
+
 export interface Io {
   /**
    * Driver primitives behind readSafe (below). Shared logic never calls them directly: a test
@@ -76,9 +86,9 @@ export interface Io {
    * The ONLY way the shared logic writes a file. The file must stay inside `root`: a path outside it,
    * a symbolic link on the way (any folder from `root` down, or the file itself) or a real path that
    * resolves outside is refused; the text goes to a temporary file that is then renamed over the
-   * target (Node driver). Throws when refused. A driver without it cannot write.
+   * target (Node driver). Throws when refused. A driver without it cannot write. `opts`: see WriteOptions.
    */
-  writeInside?(root: string, path: string, text: string): Promise<void>
+  writeInside?(root: string, path: string, text: string, opts?: WriteOptions): Promise<void>
   /** Byte-exact copy of `from` to `to` (inside `root`, same checks as writeInside). Node driver only. */
   copyInside?(root: string, from: string, to: string): Promise<void>
   /**
