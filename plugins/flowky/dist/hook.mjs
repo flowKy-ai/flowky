@@ -1143,6 +1143,7 @@ async function loadGuardrails(io, root) {
   return normalizeGuardrails(value);
 }
 var OLD_GUARD_SCRIPT = "flowky-guard.mjs";
+var OLD_GUARD_PATH = `.flowky/hooks/${OLD_GUARD_SCRIPT}`;
 var PROJECT_SETTINGS = [".claude/settings.json", ".claude/settings.local.json"];
 function oldGuardEvents(settingsText) {
   if (!settingsText) return [];
@@ -1169,6 +1170,9 @@ function oldGuardEvents(settingsText) {
   }
   return events;
 }
+async function oldGuardScriptPresent(io, root) {
+  return await readSafe(io, join(root, OLD_GUARD_PATH), { maxBytes: 64, partial: true, root }) !== void 0;
+}
 async function findOldGuard(io, root) {
   const out = [];
   for (const file of PROJECT_SETTINGS) {
@@ -1176,6 +1180,7 @@ async function findOldGuard(io, root) {
     const events = oldGuardEvents(await readSafe(io, p, { maxBytes: 1024 * 1024, root }));
     if (events.length) out.push({ file, events });
   }
+  if (out.length && !await oldGuardScriptPresent(io, root)) return [];
   return out;
 }
 function oldGuardAdvice(found) {
