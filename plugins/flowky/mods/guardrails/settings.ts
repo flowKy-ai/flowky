@@ -91,6 +91,8 @@ export async function loadGuardrails(io: Io, root: string): Promise<GuardrailsCo
 
 /** The file name of the FlowKy VS Code extension's project hook. */
 export const OLD_GUARD_SCRIPT = 'flowky-guard.mjs'
+/** Where the extension installs that script, relative to the project. */
+export const OLD_GUARD_PATH = `.flowky/hooks/${OLD_GUARD_SCRIPT}`
 export const PROJECT_SETTINGS = ['.claude/settings.json', '.claude/settings.local.json'] as const
 
 export type OldGuard = { file: string; events: string[] }
@@ -122,7 +124,20 @@ export function oldGuardEvents(settingsText: string | undefined): string[] {
   return events
 }
 
-/** Where the project still wires the extension's old guard hook (read only; never changed here). */
+/**
+ * Is the old guard's script there: a plain file inside the project, read by the shared reader's
+ * rules (never a link, a junction or a special file)? Only its first bytes are read.
+ */
+export async function oldGuardScriptPresent(io: Io, root: string): Promise<boolean> {
+  return (await readSafe(io, join(root, OLD_GUARD_PATH), { maxBytes: 64, partial: true, root })) !== undefined
+}
+
+/**
+ * Where the project still wires the extension's old guard hook, and its script is there to run
+ * (read only; never changed here). A settings entry whose script is missing, or has a link in its
+ * place, runs no guard, so it does not count: the plugin's own guardrails then run, and the project
+ * is never left without a guard.
+ */
 export async function findOldGuard(io: Io, root: string): Promise<OldGuard[]> {
   const out: OldGuard[] = []
   for (const file of PROJECT_SETTINGS) {
@@ -130,6 +145,7 @@ export async function findOldGuard(io: Io, root: string): Promise<OldGuard[]> {
     const events = oldGuardEvents(await readSafe(io, p, { maxBytes: 1024 * 1024, root }))
     if (events.length) out.push({ file, events })
   }
+  if (out.length && !(await oldGuardScriptPresent(io, root))) return []
   return out
 }
 

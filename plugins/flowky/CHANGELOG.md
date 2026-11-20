@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- The FlowKy VS Code extension's old guard hook keeps the plugin's guardrails quiet only when its
+  script, `.flowky/hooks/flowky-guard.mjs`, is in the project as a plain file. An entry whose script
+  is missing (for example a clone without `.flowky/`), or has a link in its place, runs no guard, so
+  the plugin's own guardrails now run there.
+
 ## 0.4.0
 
 The four guardrails, in the shared core (FlowKy Pro runs the same code):

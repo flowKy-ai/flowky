@@ -543,13 +543,27 @@ for (const agent of AGENTS) {
 
   // ---- the second copy of the guard ----
 
-  t('the extension\'s old project hook in the settings makes guardrails 1 to 3 quiet', async () => {
-    const settings = JSON.stringify({ hooks: { PreToolUse: [{ matcher: 'Write|Edit|MultiEdit', hooks: [{ type: 'command', command: 'node "${CLAUDE_PROJECT_DIR}/.flowky/hooks/flowky-guard.mjs"' }] }] } })
-    const io = project(ROOT, { '.claude/settings.json': settings })
+  const OLD_HOOK_SETTINGS = JSON.stringify({ hooks: { PreToolUse: [{ matcher: 'Write|Edit|MultiEdit', hooks: [{ type: 'command', command: 'node "${CLAUDE_PROJECT_DIR}/.flowky/hooks/flowky-guard.mjs"' }] }] } })
+
+  t('the extension\'s old project hook in the settings, with its script, makes guardrails 1 to 3 quiet', async () => {
+    const io = project(ROOT, { '.claude/settings.json': OLD_HOOK_SETTINGS, '.flowky/hooks/flowky-guard.mjs': '// the extension hook\n' })
     await agent.start(io, ROOT, 's')
     expect(await agent.write(io, ROOT, 's', at(ROOT, 'src/x.ts'), NEW_FILE)).toEqual({})
     const r = await fail3(io)
     expect(r[2]).toEqual({})
+  })
+
+  t('the old hook wired without its script runs no guard, so the plugin\'s guardrails answer', async () => {
+    const io = project(ROOT, { '.claude/settings.json': OLD_HOOK_SETTINGS })
+    await agent.start(io, ROOT, 's')
+    expect((await agent.write(io, ROOT, 's', at(ROOT, 'src/x.ts'), NEW_FILE)).denied).toContain('src/lib/safe-redirect.ts:4')
+  })
+
+  t('a link in place of the old hook\'s script counts as no script', async () => {
+    const io = project(ROOT, { '.claude/settings.json': OLD_HOOK_SETTINGS, '.flowky/hooks/flowky-guard.mjs': '// somewhere else\n' })
+    io.links.add(`${ROOT}/.flowky/hooks/flowky-guard.mjs`)
+    await agent.start(io, ROOT, 's')
+    expect((await agent.write(io, ROOT, 's', at(ROOT, 'src/x.ts'), NEW_FILE)).denied).toContain('src/lib/safe-redirect.ts:4')
   })
 
   // ---- state ----
