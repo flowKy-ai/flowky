@@ -1,6 +1,6 @@
-# FlowKy for Claude Code
+# FlowKy Guard
 
-A map of your project at every session start, one clear hint before your context grows large, a
+FlowKy's plugin for Claude Code: a map of your project at every session start, one clear hint before your context grows large, a
 handoff summary so you can compact without losing work, four guardrails (a duplicate guard, a
 three-strike loop breaker, a git staleness line and a configuration doctor), and a health check
 that says what is running. The plugin makes no network request and no model call. MIT licence.

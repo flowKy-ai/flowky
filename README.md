@@ -26,7 +26,7 @@ Built for Claude Code. The project map and the generated configuration also work
 | **Writes the configuration** | One command writes `CLAUDE.md`, path-scoped rules and the project-map skill from your real codebase. |
 | **Your keys, your machine** | OpenAI, Anthropic, Google or any OpenAI-compatible endpoint. Keys stay in your editor, and model calls go straight to your provider, not through us. |
 
-**In FlowKy for Claude Code (the plugin), today**
+**In FlowKy Guard (the plugin), today**
 
 | | |
 |---|---|

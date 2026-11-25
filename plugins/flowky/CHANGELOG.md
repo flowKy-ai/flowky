@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- The plugin is named **FlowKy Guard** (was "FlowKy for Claude Code"). Its identifier, `flowky@flowky`, its
+  commands and its install steps are unchanged.
+
 - The FlowKy VS Code extension's old guard hook keeps the plugin's guardrails quiet only when its
   script, `.flowky/hooks/flowky-guard.mjs`, is in the project as a plain file. An entry whose script
   is missing (for example a clone without `.flowky/`), or has a link in its place, runs no guard, so

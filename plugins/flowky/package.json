@@ -2,7 +2,7 @@
   "name": "flowky-plugin",
   "version": "0.4.0",
   "private": true,
-  "description": "FlowKy for Claude Code: development tooling. The plugin itself needs no install step.",
+  "description": "FlowKy Guard: development tooling. The plugin itself needs no install step.",
   "license": "MIT",
   "type": "module",
   "engines": {
